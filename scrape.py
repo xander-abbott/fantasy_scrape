@@ -14,8 +14,8 @@ nextgen = "https://nextgenstats.nfl.com/stats/receiving#yards"
 
 # https://www.fantasypros.com/nfl/games/justin-jefferson.php?season=2021&scoring=PPR
 
-def extract_players():
-    data = pd.read_html("https://www.fantasypros.com/nfl/stats/wr.php?year=2022&scoring=PPR")[0]
+def extract_players(year: str):
+    data = pd.read_html("https://www.fantasypros.com/nfl/stats/wr.php?year=" + year + "&scoring=PPR")[0]
     # unnesting
     data.columns = ['_'.join(col) for col in data.columns.values]
     # renaming first two columns
@@ -30,16 +30,32 @@ def clean_name(text: str):
     text = text.rsplit(' ', 1)[0].lower()
     text = text.replace("amon-ra", "amonra")
     text = text.replace(" jr.", "")
-    text = text.replace(". ", "")
+    text = text.replace(" sr.", "")
+    text = text.replace("st. ", "st.")
     text = text.replace(".", "")
+    text = text.replace("'", "")
     text = text.replace(" ", "-")
+    # edge cases in top 100, no rhyme/reason
+    text = text.replace("gabe", "gabriel")
+    text = text.replace("joshua", "josh")
+    text = text.replace("valdes-scantling", "valdesscantling")
+    text = text.replace("robinson-ii", "robinson")
+    text = text.replace("westbrook-ikhine", "westbrook")
+    text = text.replace("equanimeous-stbrown", "equanimeous-st-brown")
+    text = text.replace("chosen", "robby")
+    text = text.replace("ruggs-iii", "ruggs")
     return text
     
 
-def extract_previous_year(name: str, position: str, scoring: str):
-    url = "https://www.fantasypros.com/nfl/games/" + name + ".php?season=2021&scoring=" + scoring
-    
-
+def extract_year(name: str, year: str, scoring: str):
+    url = "https://www.fantasypros.com/nfl/games/" + name + ".php?season=" + year + "&scoring=" + scoring
+    data = pd.read_html(url)[0]
+    data.columns = ['_'.join(col) for col in data.columns.values]
+    data = data.drop(data.columns[[0, 1, 2]],axis = 1)
+    data = data.drop(data.columns[-1], axis=1)
+    data = data.apply(pd.to_numeric, errors = "coerce")
+    data = data.dropna().reset_index(drop=True)
+    return data
 
 
 def extract(position : str, player : str, year : str, scoring : str, limit_: int = 100):
@@ -60,3 +76,42 @@ def extract(position : str, player : str, year : str, scoring : str, limit_: int
     # each result is a player and their stats
     rows = doc.find_all("tr", attrs={'class': re.compile('mpb\-player\-*')}, limit = limit_)
     return rows
+
+def make_dists(names, year):
+    raw = []
+    count = 1
+    for name in names:
+        if name in ['dj-moore', 'mike-williams']:
+            name += '-wr'
+        try:
+            data = extract_year(name, year=year, scoring="PPR")
+        except:
+            return "couldn't extract for " + name
+        else:
+            avg_rec = np.mean(data["Receiving_rec"])
+            var_rec = np.std(data["Receiving_rec"])
+            avg_tgt = np.mean(data["Receiving_Tgt"])
+            var_tgt = np.std(data["Receiving_Tgt"])
+            avg_yds = np.mean(data["Receiving_yds"])
+            var_yds = np.std(data["Receiving_yds"])
+            avg_ypr = np.mean(data["Receiving_Y/R"])
+            var_ypr = np.std(data["Receiving_Y/R"])
+            avg_lg = np.mean(data["Receiving_lg"])
+            var_lg = np.std(data["Receiving_lg"])
+            avg_TD = np.mean(data["Receiving_TD"])
+            var_TD = np.std(data["Receiving_TD"])
+            avg_rush = np.mean(data["Rushing_att"])
+            var_rush = np.std(data["Rushing_att"])
+            avg_ryds = np.mean(data["Rushing_yds"])
+            var_ryds = np.std(data["Rushing_yds"])
+            avg_rTD = np.mean(data["Rushing_TD"])
+            var_rTD = np.std(data["Rushing_TD"])
+            raw.append([name, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
+                        avg_lg, var_lg, avg_TD, var_TD, avg_rush, var_rush, avg_ryds, var_ryds,
+                        avg_rTD, var_rTD])
+    df = pd.DataFrame(raw, columns=["name", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
+                                        "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD", 
+                                        "avg_rush", "var_rush", "avg_ryds", "var_ryds", "avg_rTD", "var_rTD"])
+    return df
+    
+    
