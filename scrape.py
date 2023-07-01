@@ -2,20 +2,27 @@
 import pandas as pd
 import numpy as np
 from bs4 import BeautifulSoup
-import sklearn
 import seaborn as sns
 import requests
 import re
-import pandas as pd
+import datetime as dt
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import scale
 
 base = "https://www.fantasypros.com/nfl/stats/"
 
-nextgen = "https://nextgenstats.nfl.com/stats/receiving#yards"
-
 # https://www.fantasypros.com/nfl/games/justin-jefferson.php?season=2021&scoring=PPR
 
-def extract_players(year: str):
-    data = pd.read_html("https://www.fantasypros.com/nfl/stats/wr.php?year=" + year + "&scoring=PPR")[0]
+def extract_players(year: str, pos: str, scoring: str):
+    """
+    Reads html from fantasypros stats per position, year, and scoring specifications into a pandas df.
+    Also transforms player names to be url-friendly
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+        Scoring: string consisting of "PPR", "HALF"
+    """
+    data = pd.read_html("https://www.fantasypros.com/nfl/stats/" + pos + ".php?year=" + year + "&scoring=" + scoring)[0]
     # unnesting
     data.columns = ['_'.join(col) for col in data.columns.values]
     # renaming first two columns
@@ -35,7 +42,7 @@ def clean_name(text: str):
     text = text.replace(".", "")
     text = text.replace("'", "")
     text = text.replace(" ", "-")
-    # edge cases in top 100, no rhyme/reason
+    # edge cases in top 100 (2020-2022 wrs), no rhyme/reason
     text = text.replace("gabe", "gabriel")
     text = text.replace("joshua", "josh")
     text = text.replace("valdes-scantling", "valdesscantling")
@@ -44,10 +51,37 @@ def clean_name(text: str):
     text = text.replace("equanimeous-stbrown", "equanimeous-st-brown")
     text = text.replace("chosen", "robby")
     text = text.replace("ruggs-iii", "ruggs")
+    text = text.replace("william-fuller-v", "will-fuller")
+    text = text.replace("willie-snead-iv", "willie-snead")
     return text
-    
+
+def extract_age(name: str, year_: str):
+    """
+    given player name and year, finds the age of that player at the specified time
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+        Scoring: string consisting of "PPR", "HALF"
+    """
+    time_diff = dt.date.today().year - eval(year_)
+    url = "https://www.fantasypros.com/nfl/games/" + name + ".php?season=" + year_ + "&scoring=PPR"
+    result = requests.get(url)
+    doc = BeautifulSoup(result.text, "html.parser")
+    deets = doc.find_all("span", attrs={'class': 'bio-detail'})
+    for deet in deets:
+        if "Age" in str(deet):
+            current_age = int(re.findall(r'\b\d+\b', str(deet))[0])
+    return current_age - time_diff
+
 
 def extract_year(name: str, year: str, scoring: str):
+    """
+    Reads a player's game log from a past year 
+    Inputs: 
+        Name: player name
+        Year: string consisting of a year (yyyy)
+        Scoring: string consisting of "PPR", "HALF"
+    """
     url = "https://www.fantasypros.com/nfl/games/" + name + ".php?season=" + year + "&scoring=" + scoring
     data = pd.read_html(url)[0]
     data.columns = ['_'.join(col) for col in data.columns.values]
@@ -56,6 +90,20 @@ def extract_year(name: str, year: str, scoring: str):
     data = data.apply(pd.to_numeric, errors = "coerce")
     data = data.dropna().reset_index(drop=True)
     return data
+
+def run_knn(data: pd.DataFrame, clusters: int):
+    mat = data.values
+    names = mat[:,0]
+    mat = np.delete(mat, 0, 1)  # delete name column of mat
+    # Using sklearn
+    km = KMeans(n_clusters=clusters)
+    mat = scale(mat)
+    km.fit(mat)
+    # Get cluster assignment labels
+    labels = km.labels_
+    # Format results as a DataFrame
+    results = pd.DataFrame([names,labels], index=["name", "class"]).T
+    return results
 
 
 def extract(position : str, player : str, year : str, scoring : str, limit_: int = 100):
@@ -81,10 +129,11 @@ def make_dists(names, year):
     raw = []
     count = 1
     for name in names:
-        if name in ['dj-moore', 'mike-williams']:
+        print(name)
+        if name in ['dj-moore', 'mike-williams', 'michael-thomas']:
             name += '-wr'
         try:
-            data = extract_year(name, year=year, scoring="PPR")
+            data = extract_year(name=name, year=year, scoring="PPR")
         except:
             return "couldn't extract for " + name
         else:
@@ -106,10 +155,11 @@ def make_dists(names, year):
             var_ryds = np.std(data["Rushing_yds"])
             avg_rTD = np.mean(data["Rushing_TD"])
             var_rTD = np.std(data["Rushing_TD"])
-            raw.append([name, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
+            age = extract_age(name, year)
+            raw.append([name, age, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
                         avg_lg, var_lg, avg_TD, var_TD, avg_rush, var_rush, avg_ryds, var_ryds,
                         avg_rTD, var_rTD])
-    df = pd.DataFrame(raw, columns=["name", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
+    df = pd.DataFrame(raw, columns=["name", "age", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
                                         "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD", 
                                         "avg_rush", "var_rush", "avg_ryds", "var_ryds", "avg_rTD", "var_rTD"])
     return df
