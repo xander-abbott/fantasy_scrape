@@ -29,10 +29,10 @@ def extract_players(year: str, pos: str, scoring: str):
     data.columns = ['_'.join(col) for col in data.columns.values]
     # renaming first two columns
     data.columns.values[0] = "Rank"
-    data.columns.values[1] = "Name"
+    data.columns.values[1] = "name"
     # setting rank = idx
     data = data.set_index(['Rank'])
-    data['name'] = data['Name'].apply(lambda x: clean_name(x))
+    data['name'] = data['name'].apply(lambda x: clean_name(x))
     return data
 
 def clean_name(text: str):
@@ -74,10 +74,16 @@ def clean_name(text: str):
     text = text.replace("rodney-smith", 'rodney-smith-rb')
     # TE edits
     text = text.replace("irv-smith", "irv-smith-jr")
+    # QB edits
+    text = text.replace("patrick-mahomes-ii", "patrick-mahomes")
+    text = text.replace("gardner-minshew-ii", "gardner-minshew")
+    text = text.replace('pj-walker', 'phillip-walker')
     if text in ['dj-moore', 'mike-williams', 'michael-thomas']:
         text += '-wr'
     if text in ['najee-harris', 'michael-carter', 'damien-harris', 'justin-jackson', 'elijah-mitchell']:
         text += '-rb'
+    if text in ['josh-allen']:
+        text += '-qb'
     return text
 
 def extract_age(name: str, year_: str):
@@ -134,6 +140,7 @@ def reorder_class(data: pd.DataFrame, num_classes: int):
     return data
 
 def run_knn(data: pd.DataFrame, clusters: int):
+    print(data[data.isna().any(axis=1)]['name'])
     mat = data.values
     names = mat[:,0]
     mat = np.delete(mat, 0, 1)  # delete name column of mat
@@ -148,62 +155,47 @@ def run_knn(data: pd.DataFrame, clusters: int):
     results = reorder_class(results, clusters)
     return results
 
-
-def extract(position : str, player : str, year : str, scoring : str, limit_: int = 100):
-    """
-    Reads html from fantasypros stats per position, year, and scoring specifications
-    Inputs: 
-        Position: a string consisting of "wr", "rb", "te", "qb"
-        Year: string consisting of a year (yyyy)
-        Scoring: string consisting of "PPR", "HALF"
-        Limit: limits the number of rows/players
-    """
-    url = base + position + ".php?year=" + year + "&scoring=" + scoring
-    # access url
-    result = requests.get(url)
-    # read html
-    doc = BeautifulSoup(result.text, "html.parser")
-    # tr is table row. Find all table rows with class starting with "mpb-player-..."
-    # each result is a player and their stats
-    rows = doc.find_all("tr", attrs={'class': re.compile('mpb\-player\-*')}, limit = limit_)
-    return rows
-
 def make_dists(names: str, year: str, pos: str):
     raw_rec = []
     raw_rb = []
-    count = 1
     for name in names:
         print(name)
         data = extract_year(name=name, year=year, scoring="PPR")
+        # recieving
         avg_rec = np.mean(data["Receiving_rec"])
-        var_rec = np.std(data["Receiving_rec"])
+        std_rec = np.std(data["Receiving_rec"])
         avg_tgt = np.mean(data["Receiving_Tgt"])
-        var_tgt = np.std(data["Receiving_Tgt"])
+        std_tgt = np.std(data["Receiving_Tgt"])
         avg_yds = np.mean(data["Receiving_yds"])
-        var_yds = np.std(data["Receiving_yds"])
+        std_yds = np.std(data["Receiving_yds"])
         avg_ypr = np.mean(data["Receiving_Y/R"])
-        var_ypr = np.std(data["Receiving_Y/R"])
+        std_ypr = np.std(data["Receiving_Y/R"])
         avg_lg = np.mean(data["Receiving_lg"])
-        var_lg = np.std(data["Receiving_lg"])
+        std_lg = np.std(data["Receiving_lg"])
         avg_TD = np.mean(data["Receiving_TD"])
-        var_TD = np.std(data["Receiving_TD"])
+        std_TD = np.std(data["Receiving_TD"])
+        # rushing
         avg_rush = np.mean(data["Rushing_att"])
-        var_rush = np.std(data["Rushing_att"])
+        std_rush = np.std(data["Rushing_att"])
         avg_ryds = np.mean(data["Rushing_yds"])
-        var_ryds = np.std(data["Rushing_yds"])
+        std_ryds = np.std(data["Rushing_yds"])
+        avg_rypa = np.mean(data["Rushing_Y/A"])
+        std_rypa = np.std(data["Rushing_Y/A"])
+        avg_rlg = np.mean(data["Rushing_lg"])
+        std_rlg = np.std(data["Rushing_lg"])
         avg_rTD = np.mean(data["Rushing_TD"])
-        var_rTD = np.std(data["Rushing_TD"])
+        std_rTD = np.std(data["Rushing_TD"])
         age = extract_age(name, year)
         games_played = data.shape[0]
-        raw_rb.append([name, age, games_played, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
-                    avg_lg, var_lg, avg_TD, var_TD, avg_rush, var_rush, avg_ryds, var_ryds,
-                    avg_rTD, var_rTD])
-        raw_rec.append([name, age, games_played, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
-                    avg_lg, var_lg, avg_TD, var_TD])
+        raw_rb.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
+                    avg_lg, std_lg, avg_TD, std_TD, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
+                    std_rlg, avg_rTD, std_rTD])
+        raw_rec.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
+                    avg_lg, std_lg, avg_TD, std_TD])
     if pos in ['rb', 'wr']:
-        data = pd.DataFrame(raw_rb, columns=["name", "age", "games_played", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
-                                        "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD", 
-                                        "avg_rush", "var_rush", "avg_ryds", "var_ryds", "avg_rTD", "var_rTD"])
+        data = pd.DataFrame(raw_rb, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
+                                        "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD", 
+                                        "avg_rush", "std_rush", "avg_ryds", "std_ryds","avg_rypa", "std_rypa", "avg_rlg", "std_rlg", "avg_rTD", "std_rTD"])
         # combine aggregates with team target %
         data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
         clusters = run_knn(data, 5)
@@ -211,14 +203,64 @@ def make_dists(names: str, year: str, pos: str):
         data = pd.merge(data, clusters, how='inner', on=['name'])
         return data
     else:
-        data = pd.DataFrame(raw_rec, columns=["name", "age", "games_played", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
-                                        "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD"])
+        data = pd.DataFrame(raw_rec, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
+                                        "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD"])
         # combine aggregates with team target %
         data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
         clusters = run_knn(data, 5)
         # combine data with knn clusters
         data = pd.merge(data, clusters, how='inner', on=['name'])
         return data       
+
+def make_dists_qb(names: str, year: str, pos: str):
+    raw_qb = []
+    for name in names:
+        print(name)
+        data = extract_year(name=name, year=year, scoring="PPR")
+        # passing
+        avg_qbr = np.mean(data["Passing_QB Rat"])
+        std_qbr = np.std(data["Passing_QB Rat"])
+        avg_cmp = np.mean(data["Passing_cmp"])
+        std_cmp = np.std(data["Passing_cmp"])
+        avg_att = np.mean(data["Passing_att"])
+        std_att = np.std(data["Passing_att"])
+        avg_pct = np.mean(data["Passing_pct"])
+        std_pct = np.std(data["Passing_pct"])
+        avg_pyds = np.mean(data["Passing_yds"])
+        std_pyds = np.std(data["Passing_yds"])
+        avg_ypa = np.mean(data["Passing_Y/A"])
+        std_ypa = np.std(data["Passing_Y/A"])
+        avg_TD = np.mean(data["Passing_TD"])
+        std_TD = np.std(data["Passing_TD"])
+        avg_INT = np.mean(data["Passing_INT"])
+        std_INT = np.std(data["Passing_INT"])
+        avg_SACK = np.mean(data["Passing_Sacks"])
+        std_SACK = np.std(data["Passing_Sacks"])
+        # rushing
+        avg_rush = np.mean(data["Rushing_att"])
+        std_rush = np.std(data["Rushing_att"])
+        avg_ryds = np.mean(data["Rushing_yds"])
+        std_ryds = np.std(data["Rushing_yds"])
+        avg_rypa = np.mean(data["Rushing_Y/A"])
+        std_rypa = np.std(data["Rushing_Y/A"])
+        avg_rlg = np.mean(data["Rushing_lg"])
+        std_rlg = np.std(data["Rushing_lg"])
+        avg_rTD = np.mean(data["Rushing_TD"])
+        std_rTD = np.std(data["Rushing_TD"])
+        age = extract_age(name, year)
+        games_played = data.shape[0]
+        raw_qb.append([name, age, games_played, avg_qbr, std_qbr, avg_cmp, std_cmp, avg_att, std_att, avg_pct, std_pct, 
+                        avg_pyds, std_pyds, avg_ypa, std_ypa, avg_TD, std_TD, avg_INT, std_INT, avg_SACK, std_SACK, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
+                        std_rlg, avg_rTD, std_rTD])
+    data = pd.DataFrame(raw_qb, columns=['name', 'age', 'games_played', 'avg_qbr', 'std_qbr', 'avg_cmp', 'std_cmp', 'avg_att', 'std_att', 'avg_pct', 'std_pct', 
+                    'avg_pyds', 'std_pyds', 'avg_ypa', 'std_ypa', 'avg_TD', 'std_TD', 'avg_INT', 'std_INT', 'avg_SACK', 'std_SACK', 'avg_rush', 'std_rush', 'avg_ryds', 'std_ryds', 'avg_rypa', 'std_rypa', 'avg_rlg',
+                    'std_rlg', 'avg_rTD', 'std_rTD'])
+    if year == '2020':
+        data = data[data.name != 'marcus-mariota']
+    clusters = run_knn(data, 5)
+        # combine data with knn clusters
+    data = pd.merge(data, clusters, how='inner', on=['name'])
+    return data
 
 def read_targets(year: str, pos: str):
     file = year + "_targets.txt"
