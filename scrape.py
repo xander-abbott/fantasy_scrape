@@ -8,6 +8,8 @@ import re
 import datetime as dt
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import scale
+from sklearn.svm import SVR
+from sklearn.model_selection import GridSearchCV
 
 base = "https://www.fantasypros.com/nfl/stats/"
 
@@ -198,7 +200,7 @@ def make_dists(names: str, year: str, pos: str):
                     avg_rTD, var_rTD])
         raw_rec.append([name, age, games_played, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
                     avg_lg, var_lg, avg_TD, var_TD])
-    if pos == 'rb':
+    if pos in ['rb', 'wr']:
         data = pd.DataFrame(raw_rb, columns=["name", "age", "games_played", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
                                         "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD", 
                                         "avg_rush", "var_rush", "avg_ryds", "var_ryds", "avg_rTD", "var_rTD"])
@@ -225,7 +227,40 @@ def read_targets(year: str, pos: str):
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
+def model_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame):
+    prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
+    prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
+    # combining historical years
+    main = prod21.append([prod20], ignore_index=True)
+    # creating matrix
+    X_train = main.values
+    # seperating response
+    y_train = X_train[:,-1]
+    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
+    X_train = scale(X_train) # scale training data
+    # Using sklearn
+    param_grid = {'C': [0.1, 1, 10, 100, 1000], 
+                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
+                'kernel': ['rbf']}
+    svr = SVR()
+    # initializing grid search
+    grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
+    grid.fit(X_train, y_train)
 
+    # creating test matrix
+    X_test = data2022.values
+    # recording player names
+    names2022 = X_test[:,0]
+    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
+    X_test = scale(X_test)
+    fpts_pred = grid.predict(X_test)
+    results = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
+    classes = data2022[['name', 'class']]
+    results = pd.merge(results, classes, how='inner', on=['name'])
+    results = results.sort_values('proj fpts', ascending=False)
+    results = results.reset_index(drop=True)
+    return results
 
 
     
