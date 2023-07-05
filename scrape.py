@@ -30,11 +30,13 @@ def extract_players(year: str, pos: str, scoring: str):
     data.columns.values[1] = "Name"
     # setting rank = idx
     data = data.set_index(['Rank'])
-    data['Name'] = data['Name'].apply(lambda x: clean_name(x))
+    data['name'] = data['Name'].apply(lambda x: clean_name(x))
     return data
 
 def clean_name(text: str):
-    text = text.rsplit(' ', 1)[0].lower()
+    text = text.lower()
+    if len(text.split(' ')) != 2 and text != 'amon-ra st. brown':
+        text = text.rsplit(' ', 1)[0]
     text = text.replace("amon-ra", "amonra")
     text = text.replace(" jr.", "")
     text = text.replace(" sr.", "")
@@ -44,7 +46,7 @@ def clean_name(text: str):
     text = text.replace(" ", "-")
     # edge cases in top 100 (2020-2022 wrs), no rhyme/reason
     text = text.replace("gabe", "gabriel")
-    text = text.replace("joshua", "josh")
+    text = text.replace("joshua-palmer", "josh-palmer")
     text = text.replace("valdes-scantling", "valdesscantling")
     text = text.replace("robinson-ii", "robinson")
     text = text.replace("westbrook-ikhine", "westbrook")
@@ -53,6 +55,27 @@ def clean_name(text: str):
     text = text.replace("ruggs-iii", "ruggs")
     text = text.replace("william-fuller-v", "will-fuller")
     text = text.replace("willie-snead-iv", "willie-snead")
+    # RB edits
+    text = text.replace('kenneth-walker-iii', 'kenneth-walker-rb')
+    text = text.replace('jeff-wilson', 'jeffery-wilson')
+    text = text.replace('brian-robinson', 'brian-robinson-jr')
+    text = text.replace('zonovan', 'zonovan-bam')
+    text = text.replace('ingram-ii', 'ingram')
+    text = text.replace("melvin-gordon-iii", "melvin-gordon")
+    text = text.replace("avery-williams", "avery-williams-cb")
+    text = text.replace("pierre-strong", "pierre-strong-jr")
+    text = text.replace("mike-davis", "mike-davis-rb")
+    text = text.replace("david-johnson", "david-johnson-rb")
+    text = text.replace("todd-gurley-ii", 'todd-gurley')
+    text = text.replace("benny-snell", 'benjamin-snell-jr')
+    text = text.replace("adrian-peterson", 'adrian-peterson-min')
+    text = text.replace("rodney-smith", 'rodney-smith-rb')
+    # TE edits
+    text = text.replace("irv-smith", "irv-smith-jr")
+    if text in ['dj-moore', 'mike-williams', 'michael-thomas']:
+        text += '-wr'
+    if text in ['najee-harris', 'michael-carter', 'damien-harris', 'justin-jackson', 'elijah-mitchell']:
+        text += '-rb'
     return text
 
 def extract_age(name: str, year_: str):
@@ -89,6 +112,23 @@ def extract_year(name: str, year: str, scoring: str):
     data = data.drop(data.columns[-1], axis=1)
     data = data.apply(pd.to_numeric, errors = "coerce")
     data = data.dropna().reset_index(drop=True)
+    return data[:-1]
+
+def reorder_class(data: pd.DataFrame, num_classes: int):
+    class_num = 0
+    # build mapping of classes
+    idx = 0
+    class_names = {}
+    while class_num < num_classes:
+        # get class
+        result = data['class'][idx]
+        # if class unseen, record it
+        if result not in class_names:
+            #record and increment class
+            class_names[result] = class_num
+            class_num += 1
+        idx += 1
+    data['class'] = data['class'].apply(lambda x: class_names[x])
     return data
 
 def run_knn(data: pd.DataFrame, clusters: int):
@@ -103,6 +143,7 @@ def run_knn(data: pd.DataFrame, clusters: int):
     labels = km.labels_
     # Format results as a DataFrame
     results = pd.DataFrame([names,labels], index=["name", "class"]).T
+    results = reorder_class(results, clusters)
     return results
 
 
@@ -125,43 +166,67 @@ def extract(position : str, player : str, year : str, scoring : str, limit_: int
     rows = doc.find_all("tr", attrs={'class': re.compile('mpb\-player\-*')}, limit = limit_)
     return rows
 
-def make_dists(names, year):
-    raw = []
+def make_dists(names: str, year: str, pos: str):
+    raw_rec = []
+    raw_rb = []
     count = 1
     for name in names:
         print(name)
-        if name in ['dj-moore', 'mike-williams', 'michael-thomas']:
-            name += '-wr'
-        try:
-            data = extract_year(name=name, year=year, scoring="PPR")
-        except:
-            return "couldn't extract for " + name
-        else:
-            avg_rec = np.mean(data["Receiving_rec"])
-            var_rec = np.std(data["Receiving_rec"])
-            avg_tgt = np.mean(data["Receiving_Tgt"])
-            var_tgt = np.std(data["Receiving_Tgt"])
-            avg_yds = np.mean(data["Receiving_yds"])
-            var_yds = np.std(data["Receiving_yds"])
-            avg_ypr = np.mean(data["Receiving_Y/R"])
-            var_ypr = np.std(data["Receiving_Y/R"])
-            avg_lg = np.mean(data["Receiving_lg"])
-            var_lg = np.std(data["Receiving_lg"])
-            avg_TD = np.mean(data["Receiving_TD"])
-            var_TD = np.std(data["Receiving_TD"])
-            avg_rush = np.mean(data["Rushing_att"])
-            var_rush = np.std(data["Rushing_att"])
-            avg_ryds = np.mean(data["Rushing_yds"])
-            var_ryds = np.std(data["Rushing_yds"])
-            avg_rTD = np.mean(data["Rushing_TD"])
-            var_rTD = np.std(data["Rushing_TD"])
-            age = extract_age(name, year)
-            raw.append([name, age, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
-                        avg_lg, var_lg, avg_TD, var_TD, avg_rush, var_rush, avg_ryds, var_ryds,
-                        avg_rTD, var_rTD])
-    df = pd.DataFrame(raw, columns=["name", "age", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
+        data = extract_year(name=name, year=year, scoring="PPR")
+        avg_rec = np.mean(data["Receiving_rec"])
+        var_rec = np.std(data["Receiving_rec"])
+        avg_tgt = np.mean(data["Receiving_Tgt"])
+        var_tgt = np.std(data["Receiving_Tgt"])
+        avg_yds = np.mean(data["Receiving_yds"])
+        var_yds = np.std(data["Receiving_yds"])
+        avg_ypr = np.mean(data["Receiving_Y/R"])
+        var_ypr = np.std(data["Receiving_Y/R"])
+        avg_lg = np.mean(data["Receiving_lg"])
+        var_lg = np.std(data["Receiving_lg"])
+        avg_TD = np.mean(data["Receiving_TD"])
+        var_TD = np.std(data["Receiving_TD"])
+        avg_rush = np.mean(data["Rushing_att"])
+        var_rush = np.std(data["Rushing_att"])
+        avg_ryds = np.mean(data["Rushing_yds"])
+        var_ryds = np.std(data["Rushing_yds"])
+        avg_rTD = np.mean(data["Rushing_TD"])
+        var_rTD = np.std(data["Rushing_TD"])
+        age = extract_age(name, year)
+        games_played = data.shape[0]
+        raw_rb.append([name, age, games_played, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
+                    avg_lg, var_lg, avg_TD, var_TD, avg_rush, var_rush, avg_ryds, var_ryds,
+                    avg_rTD, var_rTD])
+        raw_rec.append([name, age, games_played, avg_rec, var_rec, avg_tgt, var_tgt, avg_yds, var_yds, avg_ypr, var_ypr, 
+                    avg_lg, var_lg, avg_TD, var_TD])
+    if pos == 'rb':
+        data = pd.DataFrame(raw_rb, columns=["name", "age", "games_played", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
                                         "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD", 
                                         "avg_rush", "var_rush", "avg_ryds", "var_ryds", "avg_rTD", "var_rTD"])
-    return df
+        # combine aggregates with team target %
+        data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
+        clusters = run_knn(data, 5)
+        # combine data with knn clusters
+        data = pd.merge(data, clusters, how='inner', on=['name'])
+        return data
+    else:
+        data = pd.DataFrame(raw_rec, columns=["name", "age", "games_played", "avg_rec", "var_rec", "avg_tgt", "var_tgt", "avg_yds", "var_yds", 
+                                        "avg_ypr", "var_ypr", "avg_lg", "var_lg", "avg_TD", "var_TD"])
+        # combine aggregates with team target %
+        data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
+        clusters = run_knn(data, 5)
+        # combine data with knn clusters
+        data = pd.merge(data, clusters, how='inner', on=['name'])
+        return data       
+
+def read_targets(year: str, pos: str):
+    file = year + "_targets.txt"
+    data = pd.read_csv(file)
+    data = data[data['POS'] == pos.upper()]
+    data['name'] = data['NAME'].apply(lambda x: clean_name(x))
+    return data[['name', 'TM TGT %']]
+
+
+
+
     
-    
+
