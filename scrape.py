@@ -1,8 +1,10 @@
 # imports
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+import time
 import pandas as pd
 import numpy as np
 from bs4 import BeautifulSoup
-import seaborn as sns
 import requests
 import re
 import datetime as dt
@@ -10,6 +12,10 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import scale
 from sklearn.svm import SVR
 from sklearn.model_selection import GridSearchCV
+from sklearn.inspection import permutation_importance
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+
 
 base = "https://www.fantasypros.com/nfl/stats/"
 
@@ -34,6 +40,25 @@ def extract_players(year: str, pos: str, scoring: str):
     data = data.set_index(['Rank'])
     data['name'] = data['name'].apply(lambda x: clean_name(x))
     return data
+
+def read_ngs_rec(year: str, pos: str):
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chromedriver_path = '/home/user/chromedriver'
+    d = webdriver.Chrome(chromedriver_path,chrome_options=chrome_options)
+    d.get('https://nextgenstats.nfl.com/stats/receiving/' + year + '/REG/all#yards')
+    time.sleep(3)
+    html = d.page_source
+    dfs = pd.read_html(html)
+    ngs_data = dfs[1]
+    ngs_data.columns = dfs[0].columns[:-1]
+    ngs_data = ngs_data[ngs_data['POS'] == pos.upper()]
+    ngs_data = ngs_data
+    ngs_data['name'] = ngs_data['PLAYER NAME'].apply(lambda x: clean_name(x))
+    ngs_data = ngs_data.drop(ngs_data.columns[[0,1,2,7,8,9,10,11]],axis = 1)
+    return ngs_data
 
 def clean_name(text: str):
     text = text.lower()
@@ -140,14 +165,18 @@ def reorder_class(data: pd.DataFrame, num_classes: int):
     return data
 
 def run_knn(data: pd.DataFrame, clusters: int):
-    print(data[data.isna().any(axis=1)]['name'])
+    # print(data[data.isna().any(axis=1)]['name'])
     mat = data.values
     names = mat[:,0]
     mat = np.delete(mat, 0, 1)  # delete name column of mat
     # Using sklearn
     km = KMeans(n_clusters=clusters)
     mat = scale(mat)
-    km.fit(mat)
+    # PCA for 95% variance
+    pca_mod = PCA(n_components=0.95)
+    pca_mod.fit(mat)
+    reduced_mat = pca_mod.transform(mat)
+    km.fit(reduced_mat)
     # Get cluster assignment labels
     labels = km.labels_
     # Format results as a DataFrame
@@ -156,8 +185,9 @@ def run_knn(data: pd.DataFrame, clusters: int):
     return results
 
 def make_dists(names: str, year: str, pos: str):
-    raw_rec = []
-    raw_rb = []
+    if pos == 'qb':
+        return make_dists_qb(names, year, pos)
+    raw = []
     for name in names:
         print(name)
         data = extract_year(name=name, year=year, scoring="PPR")
@@ -187,30 +217,27 @@ def make_dists(names: str, year: str, pos: str):
         std_rTD = np.std(data["Rushing_TD"])
         age = extract_age(name, year)
         games_played = data.shape[0]
-        raw_rb.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
+        raw.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
                     avg_lg, std_lg, avg_TD, std_TD, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
                     std_rlg, avg_rTD, std_rTD])
-        raw_rec.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
-                    avg_lg, std_lg, avg_TD, std_TD])
-    if pos in ['rb', 'wr']:
-        data = pd.DataFrame(raw_rb, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
-                                        "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD", 
-                                        "avg_rush", "std_rush", "avg_ryds", "std_ryds","avg_rypa", "std_rypa", "avg_rlg", "std_rlg", "avg_rTD", "std_rTD"])
-        # combine aggregates with team target %
-        data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
-        clusters = run_knn(data, 5)
-        # combine data with knn clusters
-        data = pd.merge(data, clusters, how='inner', on=['name'])
-        return data
-    else:
-        data = pd.DataFrame(raw_rec, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
-                                        "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD"])
-        # combine aggregates with team target %
-        data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
-        clusters = run_knn(data, 5)
-        # combine data with knn clusters
-        data = pd.merge(data, clusters, how='inner', on=['name'])
-        return data       
+        
+    data = pd.DataFrame(raw, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
+                                    "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD", 
+                                    "avg_rush", "std_rush", "avg_ryds", "std_ryds","avg_rypa", "std_rypa", "avg_rlg", "std_rlg", "avg_rTD", "std_rTD"])
+    
+    # combine aggregates with team target %
+    data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
+
+    # combine aggregates with nfl next gen recieving stats
+    if pos in ['wr']:
+        print("merging with Next Gen Stats")
+        data = pd.merge(data, read_ngs_rec(year, pos), how='inner', on=['name'])
+
+    clusters = run_knn(data, 5)
+    # combine data with knn clusters
+    data = pd.merge(data, clusters, how='inner', on=['name'])
+    print("Done for " + year)
+    return data
 
 def make_dists_qb(names: str, year: str, pos: str):
     raw_qb = []
@@ -255,10 +282,12 @@ def make_dists_qb(names: str, year: str, pos: str):
     data = pd.DataFrame(raw_qb, columns=['name', 'age', 'games_played', 'avg_qbr', 'std_qbr', 'avg_cmp', 'std_cmp', 'avg_att', 'std_att', 'avg_pct', 'std_pct', 
                     'avg_pyds', 'std_pyds', 'avg_ypa', 'std_ypa', 'avg_TD', 'std_TD', 'avg_INT', 'std_INT', 'avg_SACK', 'std_SACK', 'avg_rush', 'std_rush', 'avg_ryds', 'std_ryds', 'avg_rypa', 'std_rypa', 'avg_rlg',
                     'std_rlg', 'avg_rTD', 'std_rTD'])
+    # marcus mariota in 2020 gives an error
     if year == '2020':
         data = data[data.name != 'marcus-mariota']
+    
     clusters = run_knn(data, 5)
-        # combine data with knn clusters
+    # combine data with knn clusters
     data = pd.merge(data, clusters, how='inner', on=['name'])
     return data
 
@@ -269,41 +298,90 @@ def read_targets(year: str, pos: str):
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def model_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame):
+def model_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True):
     prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     # combining historical years
     main = prod21.append([prod20], ignore_index=True)
-    # creating matrix
+    features = main.columns[1:-1]
+    # creating train matrix
     X_train = main.values
     # seperating response
     y_train = X_train[:,-1]
     X_train = np.delete(X_train, 0, 1)  # delete name column of mat
     X_train = np.delete(X_train, -1, 1)  # delete response column of mat
-    X_train = scale(X_train) # scale training data
-    # Using sklearn
-    param_grid = {'C': [0.1, 1, 10, 100, 1000], 
-                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
-                'kernel': ['rbf']}
-    svr = SVR()
-    # initializing grid search
-    grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
-    grid.fit(X_train, y_train)
+    scaler = StandardScaler()
+    scaler.fit(X_train)
+    X_train = scaler.transform(X_train) # scale training data
 
     # creating test matrix
     X_test = data2022.values
     # recording player names
     names2022 = X_test[:,0]
     X_test = np.delete(X_test, 0, 1)  # delete name column of mat
-    X_test = scale(X_test)
+    X_test = scaler.transform(X_test)
+
+    # Using sklearn
+    param_grid = {'C': [0.1, 1, 10, 100, 1000], 
+                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
+                'kernel': ['rbf']}
+    svr = SVR()
+    # initializing grid search model
+    grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
+
+    if pca:
+        print("PCA Selected")
+        pca_mod = PCA(n_components=0.95)
+        print("Train dimensions (pre PCA): ", X_train.shape)
+        print("Test dimensions (pre PCA): ", X_test.shape)
+        pca_mod.fit(X_train)
+        X_train = pca_mod.transform(X_train)
+        X_test = pca_mod.transform(X_test)
+        print("Train dimensions (post PCA): ", X_train.shape)
+        print("Test dimensions (post PCA): ", X_test.shape)
+
+    # fit model to training data
+    grid.fit(X_train, y_train)
+
+    if not pca:
+        # perform permutation importance
+        res = permutation_importance(grid, X_train, y_train, scoring='neg_mean_squared_error')
+        # get importance
+        importance_indices = np.argsort(res["importances_mean"])[::-1]
+        sorted_important_features = features[importance_indices]
+        print(f"Feature importances: {sorted_important_features}")
+
     fpts_pred = grid.predict(X_test)
     results = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
     classes = data2022[['name', 'class']]
     results = pd.merge(results, classes, how='inner', on=['name'])
     results = results.sort_values('proj fpts', ascending=False)
-    results = results.reset_index(drop=True)
     return results
 
 
-    
+def run_svr_2023(pos: str, scoring: str, pca: bool):
+    if pos in ['wr', 'rb']:
+        num = 100
+    else:
+        num = 50
+    # 2022
+    df2022 = extract_players('2022', pos, scoring)
+    names2022 = list(df2022["name"].head(num))
+    dists2022 = make_dists(names2022, "2022", pos)
+    # 2021
+    df2021 = extract_players("2021", pos, scoring)
+    names2021 = list(df2021["name"].head(num))
+    dists2021 = make_dists(names2021, "2021", pos)
+    # 2020
+    df2020 = extract_players("2020", pos, scoring)
+    names2020 = list(df2020["name"].head(num))
+    dists2020 = make_dists(names2020, "2020", pos)
+    # model
+    res = model_2023(pos, scoring, dists2020, dists2021, dists2022, pca=pca)
+    result = {'2020_df' : dists2020,
+              '2021_df' : dists2021,
+              '2022_df' : dists2022,
+              'projections' : res
+    }
+    return result
 
