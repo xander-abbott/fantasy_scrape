@@ -26,7 +26,7 @@ base = "https://www.fantasypros.com/nfl/stats/"
 
 # https://www.fantasypros.com/nfl/games/justin-jefferson.php?season=2021&scoring=PPR
 
-def extract_players(year: str, pos: str, scoring: str):
+def extract_players(year: str, pos: str, scoring: str) -> pd.DataFrame:
     """
     Reads html from fantasypros stats per position, year, and scoring specifications into a pandas df.
     Also transforms player names to be url-friendly
@@ -46,7 +46,14 @@ def extract_players(year: str, pos: str, scoring: str):
     data['name'] = data['name'].apply(lambda x: clean_name(x))
     return data
 
-def read_ngs_rec(year: str, pos: str):
+def read_ngs_rec(year: str, pos: str) -> pd.DataFrame:
+    """
+    Reads html from NFL Next Gen Recieving Stats per position, year, and scoring specifications into a pandas df.
+    Also transforms player names to be url-friendly
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+    """
     chrome_options = Options()
     chrome_options.add_argument('--headless')
     chrome_options.add_argument('--no-sandbox')
@@ -65,7 +72,12 @@ def read_ngs_rec(year: str, pos: str):
     ngs_data = ngs_data.drop(ngs_data.columns[[0,1,2,7,8,9,10,11]],axis = 1)
     return ngs_data
 
-def clean_name(text: str):
+def clean_name(text: str) -> str:
+    """
+    Transforms a player name into a format that can be callable in html requests on fantasypros
+    Inputs: 
+        text: a player name 
+    """
     text = text.lower()
     if len(text.split(' ')) != 2 and text != 'amon-ra st. brown':
         text = text.rsplit(' ', 1)[0]
@@ -76,7 +88,7 @@ def clean_name(text: str):
     text = text.replace(".", "")
     text = text.replace("'", "")
     text = text.replace(" ", "-")
-    # edge cases in top 100 (2020-2022 wrs), no rhyme/reason
+    # edge cases in top 100 (2019-2022 wrs), no rhyme/reason
     text = text.replace("gabe", "gabriel")
     text = text.replace("joshua-palmer", "josh-palmer")
     text = text.replace("valdes-scantling", "valdesscantling")
@@ -87,6 +99,10 @@ def clean_name(text: str):
     text = text.replace("ruggs-iii", "ruggs")
     text = text.replace("william-fuller-v", "will-fuller")
     text = text.replace("willie-snead-iv", "willie-snead")
+    text = text.replace('phillip-dorsett-ii', 'phillip-dorsett')
+    text = text.replace('ted-ginn', 'ted-ginn-jr')
+    text = text.replace('bisi-johnson', 'olabisi-johnson')
+    text = text.replace('bennie-fowler-iii', 'bennie-fowler')
     # RB edits
     text = text.replace('kenneth-walker-iii', 'kenneth-walker-rb')
     text = text.replace('jeff-wilson', 'jeffery-wilson')
@@ -102,21 +118,31 @@ def clean_name(text: str):
     text = text.replace("benny-snell", 'benjamin-snell-jr')
     text = text.replace("adrian-peterson", 'adrian-peterson-min')
     text = text.replace("rodney-smith", 'rodney-smith-rb')
+    text = text.replace('chris-ivory', 'christopher-ivory')
     # TE edits
     text = text.replace("irv-smith", "irv-smith-jr")
+    text = text.replace('zach-miller', 'zach-miller-chi')
     # QB edits
     text = text.replace("patrick-mahomes-ii", "patrick-mahomes")
     text = text.replace("gardner-minshew-ii", "gardner-minshew")
     text = text.replace('pj-walker', 'phillip-walker')
+    text = text.replace('tj-yates', 'taylor-yates')
+
+    # WRS
     if text in ['dj-moore', 'mike-williams', 'michael-thomas']:
         text += '-wr'
+    # RBS
     if text in ['najee-harris', 'michael-carter', 'damien-harris', 'justin-jackson', 'elijah-mitchell']:
         text += '-rb'
+    # QBS
     if text in ['josh-allen']:
         text += '-qb'
+    # TES
+    if text in ['josh-hill']:
+        text += '-te'
     return text
 
-def extract_age(name: str, year_: str):
+def extract_age(name: str, year_: str) -> int:
     """
     given player name and year, finds the age of that player at the specified time
     Inputs: 
@@ -135,7 +161,7 @@ def extract_age(name: str, year_: str):
     return current_age - time_diff
 
 
-def extract_year(name: str, year: str, scoring: str):
+def extract_year(name: str, year: str, scoring: str) -> pd.DataFrame:
     """
     Reads a player's game log from a past year 
     Inputs: 
@@ -152,7 +178,13 @@ def extract_year(name: str, year: str, scoring: str):
     data = data.dropna().reset_index(drop=True)
     return data[:-1]
 
-def reorder_class(data: pd.DataFrame, num_classes: int):
+def reorder_class(data: pd.DataFrame, num_classes: int) -> pd.DataFrame:
+    """
+    Reorders k-means classes to represent player pedigree
+    Inputs: 
+        data: a pd.Dataframe containing name and associated classes
+        num_classes: int of the number of classes data is split into
+    """
     class_num = 0
     # build mapping of classes
     idx = 0
@@ -169,8 +201,14 @@ def reorder_class(data: pd.DataFrame, num_classes: int):
     data['class'] = data['class'].apply(lambda x: class_names[x])
     return data
 
-def run_knn(data: pd.DataFrame, clusters: int):
-    # print(data[data.isna().any(axis=1)]['name'])
+def run_k_means(data: pd.DataFrame, clusters: int) -> pd.DataFrame:
+    """
+    Applies k-means algo to classify player types within a position
+    Inputs: 
+        data: a pd.Dataframe containing name and associated classes
+        num_classes: int of the number of classes data is split into
+    """
+    print(data[data.isna().any(axis=1)]['name'])
     mat = data.values
     names = mat[:,0]
     mat = np.delete(mat, 0, 1)  # delete name column of mat
@@ -189,13 +227,19 @@ def run_knn(data: pd.DataFrame, clusters: int):
     results = reorder_class(results, clusters)
     return results
 
-def make_dists(names: str, year: str, pos: str):
+def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.DataFrame:
+    """
+    Reads html from fantasypros stats for each name and makes scoring distributions based on that year's game log and scoring type.
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+    """
     if pos == 'qb':
-        return make_dists_qb(names, year, pos)
+        return make_dists_qb(names, year, pos, scoring=scoring)
     raw = []
     for name in names:
         print(name)
-        data = extract_year(name=name, year=year, scoring="PPR")
+        data = extract_year(name=name, year=year, scoring=scoring)
         # recieving
         avg_rec = np.mean(data["Receiving_rec"])
         std_rec = np.std(data["Receiving_rec"])
@@ -238,13 +282,56 @@ def make_dists(names: str, year: str, pos: str):
         print("merging with Next Gen Stats")
         data = pd.merge(data, read_ngs_rec(year, pos), how='inner', on=['name'])
 
-    clusters = run_knn(data, 5)
+    # hunter renfrow and tyrell williams in 2019 gives an error
+    if year == '2019' and pos == 'wr':
+        data = data[data.name != 'hunter-renfrow']
+        data = data[data.name != 'tyrell-williams']
+    
+    # TODO: put in 2018 wr filters on next run
+
+    # michael crabtree, amari cooper, seth roberts, and ryan grant in 2018 gives an error
+    if year == '2017' and pos == 'wr':
+        data = data[data.name != 'michael-crabtree']
+        data = data[data.name != 'amari-cooper']
+        data = data[data.name != 'ryan-grant']
+        data = data[data.name != 'seth-roberts']
+    
+    # josh-jacobs, deandre-washington, and jalen-richard in 2019 gives an error
+    if year == '2019' and pos == 'rb':
+        data = data[data.name != 'josh-jacobs']
+        data = data[data.name != 'deandre-washington']
+        data = data[data.name != 'jalen-richard']
+    
+    if year == '2018' and pos == 'rb':
+        data = data[data.name != 'jalen-richard']
+        data = data[data.name != 'doug-martin']
+        data = data[data.name != 'marshawn-lynch']
+    
+    if year == '2017' and pos == 'rb':
+        data = data[data.name != 'jalen-richard']
+        data = data[data.name != 'deandre-washington']
+        data = data[data.name != 'marshawn-lynch']
+
+    if year == '2019' and pos == 'te':
+        data = data[data.name != 'darren-waller']
+        data = data[data.name != 'foster-moreau']
+
+    if year in ['2018', '2017'] and pos == 'te':
+        data = data[data.name != 'jared-cook']
+
+    clusters = run_k_means(data, 5)
     # combine data with knn clusters
     data = pd.merge(data, clusters, how='inner', on=['name'])
     print("Done for " + year)
     return data
 
-def make_dists_qb(names: str, year: str, pos: str):
+def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.DataFrame:
+    """
+    Reads html from fantasypros stats for each name and makes scoring distributions based on that year's game log and scoring type.
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+    """
     raw_qb = []
     for name in names:
         print(name)
@@ -290,25 +377,53 @@ def make_dists_qb(names: str, year: str, pos: str):
     # marcus mariota in 2020 gives an error
     if year == '2020':
         data = data[data.name != 'marcus-mariota']
+
+    if year == '2019':
+        data = data[data.name != 'derek-carr']
     
-    clusters = run_knn(data, 5)
+    if year == '2018':
+        data = data[data.name != 'derek-carr']
+        data = data[data.name != 'matt-barkley']
+
+    if year == '2017':
+        data = data[data.name != 'derek-carr']
+        data = data[data.name != 'ej-manuel']
+    
+    clusters = run_k_means(data, 5)
     # combine data with knn clusters
     data = pd.merge(data, clusters, how='inner', on=['name'])
     return data
 
-def read_targets(year: str, pos: str):
+def read_targets(year: str, pos: str) -> pd.DataFrame:
+    """
+    Reads CSV data for each player's target share in a year
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Year: string consisting of a year (yyyy)
+    """
     file = year + "_targets.txt"
     data = pd.read_csv(file)
     data = data[data['POS'] == pos.upper()]
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True):
+def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True, bootstrap: int = 5) -> pd.DataFrame:
+    """
+    Applies support vector regression model on data
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Scoring: fantasy scoring type
+        Year: string consisting of a year (yyyy)
+        data2020: 2020 data
+        data2021: 2021 data
+        data2022: 2022 data
+        pca: option to apply PCA on data for preprocessing
+        bootstrap: number of times to bootstrap results
+    """
     prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     # combining historical years
     main = prod21.append([prod20], ignore_index=True)
-    features = main.columns[1:-1]
     # creating train matrix
     X_train = main.values
     # seperating response
@@ -330,9 +445,6 @@ def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
     param_grid = {'C': [0.1, 1, 10, 100, 1000], 
                 'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
                 'kernel': ['rbf']}
-    svr = SVR()
-    # initializing grid search model
-    grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
 
     if pca:
         print("PCA Selected")
@@ -345,30 +457,52 @@ def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
         print("Train dimensions (post PCA): ", X_train.shape)
         print("Test dimensions (post PCA): ", X_test.shape)
 
-    # fit model to training data
-    grid.fit(X_train, y_train)
-
-    if not pca:
-        # perform permutation importance
-        res = permutation_importance(grid, X_train, y_train, scoring='neg_mean_squared_error')
-        # get importance
-        importance_indices = np.argsort(res["importances_mean"])[::-1]
-        sorted_important_features = features[importance_indices]
-        print(f"Feature importances: {sorted_important_features}")
-
-    fpts_pred = grid.predict(X_test)
-    results = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
     classes = data2022[['name', 'class']]
-    results = pd.merge(results, classes, how='inner', on=['name'])
-    results = results.sort_values('proj fpts', ascending=False)
-    return results
+    results = pd.DataFrame(columns=['name', 'proj fpts'])
+    for i in range(bootstrap):
+        svr = SVR()
+        # initializing grid search model
+        grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
 
-def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, bootstrap:int = 5):
+        # Fitting the model
+        grid.fit(X_train, y_train)
+        
+        # Predict the model
+        fpts_pred = grid.predict(X_test)
+        result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
+        results = results.append([result], ignore_index=True)
+        print(f"iteration {i+1}: Dimensions = {results.shape}")
+
+    # group bootstrapped results by player name
+    results_grouped = results.groupby('name')
+    # record mean
+    mean_result = results_grouped.mean()
+    mean_result = mean_result.sort_values('proj fpts', ascending=False)
+    # join results and classes
+    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
+    # maintain 2022 ranks and join
+    ranks_2022 = data2022.copy()
+    ranks_2022['2022 rank'] = ranks_2022.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', '2022 rank']], how='inner', on=['name'])
+    return mean_result
+
+
+def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, bootstrap:int = 5) -> pd.DataFrame:
+    """
+    Applies XBBRegressor model on data
+    Inputs: 
+        Position: a string consisting of "wr", "rb", "te", "qb"
+        Scoring: fantasy scoring type
+        Year: string consisting of a year (yyyy)
+        data2020: 2020 data
+        data2021: 2021 data
+        data2022: 2022 data
+        bootstrap: number of times to bootstrap results
+    """
     prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     # combining historical years
     main = prod21.append([prod20], ignore_index=True)
-
     # creating train matrix
     X_train = main.values
     # seperating response
@@ -430,12 +564,56 @@ def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
         results = results.append([result], ignore_index=True)
         print(f"iteration {i+1}: Dimensions = {results.shape}")
 
-    mean_result = results.groupby('name').mean()
+    # group bootstrapped results by player name
+    results_grouped = results.groupby('name')
+    # record mean
+    mean_result = results_grouped.mean()
     mean_result = mean_result.sort_values('proj fpts', ascending=False)
+    # join results and classes
     mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
-    data2022['2022 rank'] = data2022.index + 1
-    mean_result = pd.merge(mean_result, data2022[['name', '2022 rank']], how='inner', on=['name'])
+    # maintain 2022 ranks and join
+    ranks_2022 = data2022.copy()
+    ranks_2022['2022 rank'] = ranks_2022.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', '2022 rank']], how='inner', on=['name'])
     return mean_result
+
+def get_data(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = False, scoring: str = 'PPR') -> dict:
+    """
+    Fetches dictionary of fantasypros data for multiple years
+    Inputs: 
+        pos: a string consisting of "wr", "rb", "te", "qb"
+        scoring: fantasy scoring type
+        num_years: number of years total, including year_for
+        year_for: int of target year to make predictions on
+        save_csv: indicate if you want to save csv
+    """
+    # define num players to grab
+    if pos in ['wr', 'rb']:
+        num = 100
+    else:
+        num = 50
+    
+    # get dict of yearly data
+    years = {}
+    for back in range(num_years):
+        year = year_for-back
+        df = extract_players(str(year), pos, scoring)
+        names = list(df["name"].head(num))
+        data = make_dists(names, str(year), pos, scoring)
+        if save_csv:
+            data.to_csv(f'data/{(year)}_' + pos + '_' + scoring + '_data.csv')
+        years[str(year)] = data
+    return years
+    
+def get_results(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = False, scoring: str = 'PPR') -> pd.DataFrame:
+    years = {}
+    for back in range(num_years):
+        year = year_for-back
+        df = extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']]
+        if save_csv:
+            df.to_csv(f'results/{(year)}_' + pos + '_' + scoring + '_results.csv')
+        years[str(year)] = df
+    return years
 
 def run_svr_2023(pos: str, scoring: str, pca: bool):
     if pos in ['wr', 'rb']:
