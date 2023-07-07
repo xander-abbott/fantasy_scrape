@@ -4,6 +4,7 @@ from selenium.webdriver.chrome.options import Options
 import time
 import pandas as pd
 import numpy as np
+import xgboost as xg
 from bs4 import BeautifulSoup
 import requests
 import re
@@ -15,6 +16,10 @@ from sklearn.model_selection import GridSearchCV
 from sklearn.inspection import permutation_importance
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import KFold
+from sklearn.model_selection import cross_val_score
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import mean_squared_error
 
 
 base = "https://www.fantasypros.com/nfl/stats/"
@@ -298,7 +303,7 @@ def read_targets(year: str, pos: str):
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def model_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True):
+def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True):
     prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
     # combining historical years
@@ -358,6 +363,79 @@ def model_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.Data
     results = results.sort_values('proj fpts', ascending=False)
     return results
 
+def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, bootstrap:int = 5):
+    prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
+    prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
+    # combining historical years
+    main = prod21.append([prod20], ignore_index=True)
+
+    # creating train matrix
+    X_train = main.values
+    # seperating response
+    y_train = X_train[:,-1]
+    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
+    scaler = StandardScaler()
+    scaler.fit(X_train)
+    X_train = scaler.transform(X_train) # scale training data
+
+    # creating test matrix
+    X_test = data2022.values
+    # recording player names
+    names2022 = X_test[:,0]
+    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
+    # scale test according to train data
+    X_test = scaler.transform(X_test)
+
+    # apply PCA to train/test
+    pca_mod = PCA(n_components=0.95)
+    pca_mod.fit(X_train)
+    X_train = pca_mod.transform(X_train)
+    X_test = pca_mod.transform(X_test)
+
+    # initialize k-folds
+    kfold = KFold()
+
+    # operate on folds
+    fold = 0
+    for train_idx, val_idx in kfold.split(X_train, y_train):
+        X_tr = X_train[train_idx, :]
+        y_tr = y_train[train_idx]
+        
+        X_val = X_train[val_idx, :]
+        y_val = y_train[val_idx]
+
+        # initialize XGB regressor
+        xgb_r = xg.XGBRegressor(objective ='reg:squarederror', booster = 'gblinear',
+                                n_estimators = 10, eval_metric = 'rmse')
+        xgb_r.fit(X_tr, y_tr)
+        pred = xgb_r.predict(X_val)
+        rmse = mean_squared_error(y_val, pred)
+        print(f"======= Fold {fold} ========")
+        print(
+            f"Our accuracy on the validation set is {np.sqrt(rmse)}"
+        )
+        fold += 1
+
+    classes = data2022[['name', 'class']]
+    results = pd.DataFrame(columns=['name', 'proj fpts'])
+
+    for i in range(bootstrap):
+        # Fitting the model
+        xgb_r.fit(X_train, y_train)
+        
+        # Predict the model
+        fpts_pred = xgb_r.predict(X_test)
+        result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
+        results = results.append([result], ignore_index=True)
+        print(f"iteration {i+1}: Dimensions = {results.shape}")
+
+    mean_result = results.groupby('name').mean()
+    mean_result = mean_result.sort_values('proj fpts', ascending=False)
+    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
+    data2022['2022 rank'] = data2022.index + 1
+    mean_result = pd.merge(mean_result, data2022[['name', '2022 rank']], how='inner', on=['name'])
+    return mean_result
 
 def run_svr_2023(pos: str, scoring: str, pca: bool):
     if pos in ['wr', 'rb']:
@@ -377,7 +455,7 @@ def run_svr_2023(pos: str, scoring: str, pca: bool):
     names2020 = list(df2020["name"].head(num))
     dists2020 = make_dists(names2020, "2020", pos)
     # model
-    res = model_2023(pos, scoring, dists2020, dists2021, dists2022, pca=pca)
+    res = svr_2023(pos, scoring, dists2020, dists2021, dists2022, pca=pca)
     result = {'2020_df' : dists2020,
               '2021_df' : dists2021,
               '2022_df' : dists2022,
@@ -385,3 +463,28 @@ def run_svr_2023(pos: str, scoring: str, pca: bool):
     }
     return result
 
+def run_xgb_2023(pos: str, scoring: str):
+    if pos in ['wr', 'rb']:
+        num = 100
+    else:
+        num = 50
+    # 2022
+    df2022 = extract_players('2022', pos, scoring)
+    names2022 = list(df2022["name"].head(num))
+    dists2022 = make_dists(names2022, "2022", pos)
+    # 2021
+    df2021 = extract_players("2021", pos, scoring)
+    names2021 = list(df2021["name"].head(num))
+    dists2021 = make_dists(names2021, "2021", pos)
+    # 2020
+    df2020 = extract_players("2020", pos, scoring)
+    names2020 = list(df2020["name"].head(num))
+    dists2020 = make_dists(names2020, "2020", pos)
+    # model
+    res = xgb_2023(pos, scoring, dists2020, dists2021, dists2022)
+    result = {'2020_df' : dists2020,
+              '2021_df' : dists2021,
+              '2022_df' : dists2022,
+              'projections' : res
+    }
+    return result
