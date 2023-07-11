@@ -104,7 +104,7 @@ def clean_name(text: str) -> str:
     text = text.replace('bisi-johnson', 'olabisi-johnson')
     text = text.replace('bennie-fowler-iii', 'bennie-fowler')
     # RB edits
-    text = text.replace('kenneth-walker-iii', 'kenneth-walker-rb')
+    text = text.replace('kenneth-walker-iii', 'kenneth-walker')
     text = text.replace('jeff-wilson', 'jeffery-wilson')
     text = text.replace('brian-robinson', 'brian-robinson-jr')
     text = text.replace('zonovan', 'zonovan-bam')
@@ -132,7 +132,7 @@ def clean_name(text: str) -> str:
     if text in ['dj-moore', 'mike-williams', 'michael-thomas']:
         text += '-wr'
     # RBS
-    if text in ['najee-harris', 'michael-carter', 'damien-harris', 'justin-jackson', 'elijah-mitchell']:
+    if text in ['najee-harris', 'michael-carter', 'damien-harris', 'justin-jackson', 'elijah-mitchell', 'kenneth-walker']:
         text += '-rb'
     # QBS
     if text in ['josh-allen']:
@@ -160,6 +160,13 @@ def extract_age(name: str, year_: str) -> int:
             current_age = int(re.findall(r'\b\d+\b', str(deet))[0])
     return current_age - time_diff
 
+def extract_years_played(name: str, year_: str, pos: str) -> int:
+    # get year difference between current year and year specified
+    time_diff = dt.date.today().year - eval(year_)
+    url_ = 'https://www.fantasypros.com/nfl/stats/' + name + '.php'
+    years_played = pd.read_html(url_)[0].shape[0] - (time_diff + 1)
+    return years_played
+    
 
 def extract_year(name: str, year: str, scoring: str) -> pd.DataFrame:
     """
@@ -208,7 +215,10 @@ def run_k_means(data: pd.DataFrame, clusters: int) -> pd.DataFrame:
         data: a pd.Dataframe containing name and associated classes
         num_classes: int of the number of classes data is split into
     """
-    print(data[data.isna().any(axis=1)]['name'])
+    if 'kenneth-walker-rb' in data['name']:
+        print('check!')
+        print(data[data['name'] == 'kenneth-walker-rb'])
+    # print(data[data.isna().any(axis=1)]['name'])
     mat = data.values
     names = mat[:,0]
     mat = np.delete(mat, 0, 1)  # delete name column of mat
@@ -265,12 +275,13 @@ def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.Data
         avg_rTD = np.mean(data["Rushing_TD"])
         std_rTD = np.std(data["Rushing_TD"])
         age = extract_age(name, year)
+        years_played = extract_years_played(name, year, pos)
         games_played = data.shape[0]
-        raw.append([name, age, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
+        raw.append([name, age, years_played, games_played, avg_rec, std_rec, avg_tgt, std_tgt, avg_yds, std_yds, avg_ypr, std_ypr, 
                     avg_lg, std_lg, avg_TD, std_TD, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
                     std_rlg, avg_rTD, std_rTD])
         
-    data = pd.DataFrame(raw, columns=["name", "age", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
+    data = pd.DataFrame(raw, columns=["name", "age", "years_played", "games_played", "avg_rec", "std_rec", "avg_tgt", "std_tgt", "avg_yds", "std_yds", 
                                     "avg_ypr", "std_ypr", "avg_lg", "std_lg", "avg_TD", "std_TD", 
                                     "avg_rush", "std_rush", "avg_ryds", "std_ryds","avg_rypa", "std_rypa", "avg_rlg", "std_rlg", "avg_rTD", "std_rTD"])
     
@@ -287,7 +298,10 @@ def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.Data
         data = data[data.name != 'hunter-renfrow']
         data = data[data.name != 'tyrell-williams']
     
-    # TODO: put in 2018 wr filters on next run
+    if year == '2018' and pos == 'wr':
+        data = data[data.name != 'jordy-nelson']
+        data = data[data.name != 'seth-roberts']
+        data = data[data.name != 'ryan-grant']
 
     # michael crabtree, amari cooper, seth roberts, and ryan grant in 2018 gives an error
     if year == '2017' and pos == 'wr':
@@ -318,12 +332,20 @@ def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.Data
 
     if year in ['2018', '2017'] and pos == 'te':
         data = data[data.name != 'jared-cook']
+    
+    #if year == '2022' and pos == 'rb' and data.shape[0] > 1:
+    #    kw3 = recover_kw3()
+    #    data = data.append([kw3], ignore_index = True)
 
-    clusters = run_k_means(data, 5)
-    # combine data with knn clusters
-    data = pd.merge(data, clusters, how='inner', on=['name'])
+    if data.shape[0] > 1:
+        clusters = run_k_means(data, 5)
+        # combine data with knn clusters
+        data = pd.merge(data, clusters, how='inner', on=['name'])
     print("Done for " + year)
     return data
+
+def recover_kw3():
+    return make_dists(['kenneth-walker-rb'], '2022', 'rb', scoring = 'PPR')
 
 def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.DataFrame:
     """
@@ -367,11 +389,12 @@ def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.D
         avg_rTD = np.mean(data["Rushing_TD"])
         std_rTD = np.std(data["Rushing_TD"])
         age = extract_age(name, year)
+        years_played = extract_years_played(name, year, pos)
         games_played = data.shape[0]
-        raw_qb.append([name, age, games_played, avg_qbr, std_qbr, avg_cmp, std_cmp, avg_att, std_att, avg_pct, std_pct, 
+        raw_qb.append([name, age, years_played, games_played, avg_qbr, std_qbr, avg_cmp, std_cmp, avg_att, std_att, avg_pct, std_pct, 
                         avg_pyds, std_pyds, avg_ypa, std_ypa, avg_TD, std_TD, avg_INT, std_INT, avg_SACK, std_SACK, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
                         std_rlg, avg_rTD, std_rTD])
-    data = pd.DataFrame(raw_qb, columns=['name', 'age', 'games_played', 'avg_qbr', 'std_qbr', 'avg_cmp', 'std_cmp', 'avg_att', 'std_att', 'avg_pct', 'std_pct', 
+    data = pd.DataFrame(raw_qb, columns=['name', 'age', 'years_played', 'games_played', 'avg_qbr', 'std_qbr', 'avg_cmp', 'std_cmp', 'avg_att', 'std_att', 'avg_pct', 'std_pct', 
                     'avg_pyds', 'std_pyds', 'avg_ypa', 'std_ypa', 'avg_TD', 'std_TD', 'avg_INT', 'std_INT', 'avg_SACK', 'std_SACK', 'avg_rush', 'std_rush', 'avg_ryds', 'std_ryds', 'avg_rypa', 'std_rypa', 'avg_rlg',
                     'std_rlg', 'avg_rTD', 'std_rTD'])
     # marcus mariota in 2020 gives an error
@@ -401,31 +424,62 @@ def read_targets(year: str, pos: str) -> pd.DataFrame:
         Position: a string consisting of "wr", "rb", "te", "qb"
         Year: string consisting of a year (yyyy)
     """
-    file = year + "_targets.txt"
+    file = 'target_data/' + year + "_targets.txt"
     data = pd.read_csv(file)
     data = data[data['POS'] == pos.upper()]
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, pca: bool = True, bootstrap: int = 5) -> pd.DataFrame:
+def svr_model(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True, bootstrap: int = 5, pca: bool = True, csv_: bool = False) -> pd.DataFrame:
     """
     Applies support vector regression model on data
     Inputs: 
         Position: a string consisting of "wr", "rb", "te", "qb"
         Scoring: fantasy scoring type
-        Year: string consisting of a year (yyyy)
-        data2020: 2020 data
-        data2021: 2021 data
-        data2022: 2022 data
+        num_years: number of years to look back at (earliest year is 2017)
+        year_for: year of data you are using as testing
+        local: indicates whether data should be grabbed locally (keep true unless no data)
         pca: option to apply PCA on data for preprocessing
         bootstrap: number of times to bootstrap results
+        csv_: option to save projections into a csv
     """
-    prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
-    prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
-    # combining historical years
-    main = prod21.append([prod20], ignore_index=True)
+    if local:
+        # locally grab data and format as get_data output
+        datas = {}
+        for back in range(num_years+1):
+            year = year_for-back
+            # read year's worth of player data from local data folder
+            data = pd.read_csv('data/' + str(year) + '_' + pos + '_data.csv')
+            datas[str(year)] = data
+        # locally grab results and format as get_data output
+        res_s = {}
+        for back in range(num_years):
+            year = year_for-back
+            res_s[str(year)] = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
+    else:
+        datas = get_data(pos, num_years=num_years+1, year_for=year_for, save_csv=True, scoring=scoring)
+        res_s = get_results(pos, num_years=num_years, year_for=year_for, save_csv=True, scoring=scoring)
+    
+    # getting test data (most recent yearly records)
+    most_recent = datas[str(year_for)]
+
+    # historic data will have identical columns, joined upon 'MISC_FPTS/G'
+    df_cols = list(most_recent.columns)
+    df_cols.append('MISC_FPTS/G')
+    # start historic dataframe with previously specified column names
+    historic = pd.DataFrame(columns=df_cols)
+
+    # iteratively build historic data for number of years to look back upon
+    for back in range(num_years):
+        year = year_for-back
+        # merge 2021 with 2022 results, 2020 with 2021 results, ...
+        combined = pd.merge(datas[str(year-1)], res_s[str(year)], how='inner', on=['name'])
+        # append year
+        historic = historic.append([combined], ignore_index=True)
+
+
     # creating train matrix
-    X_train = main.values
+    X_train = historic.values
     # seperating response
     y_train = X_train[:,-1]
     X_train = np.delete(X_train, 0, 1)  # delete name column of mat
@@ -435,7 +489,7 @@ def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
     X_train = scaler.transform(X_train) # scale training data
 
     # creating test matrix
-    X_test = data2022.values
+    X_test = most_recent.values
     # recording player names
     names2022 = X_test[:,0]
     X_test = np.delete(X_test, 0, 1)  # delete name column of mat
@@ -457,7 +511,7 @@ def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
         print("Train dimensions (post PCA): ", X_train.shape)
         print("Test dimensions (post PCA): ", X_test.shape)
 
-    classes = data2022[['name', 'class']]
+    classes = most_recent[['name', 'class']]
     results = pd.DataFrame(columns=['name', 'proj fpts'])
     for i in range(bootstrap):
         svr = SVR()
@@ -481,30 +535,65 @@ def svr_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
     # join results and classes
     mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
     # maintain 2022 ranks and join
-    ranks_2022 = data2022.copy()
-    ranks_2022['2022 rank'] = ranks_2022.index + 1
-    mean_result = pd.merge(mean_result, ranks_2022[['name', '2022 rank']], how='inner', on=['name'])
+    ranks_2022 = most_recent.copy()
+    ranks_2022['recent rank'] = ranks_2022.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
+    if csv_:
+        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + str(year_for) + '_svr_projections.csv')
     return mean_result
 
 
-def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFrame, data2022: pd.DataFrame, bootstrap:int = 5) -> pd.DataFrame:
+def xgb_model(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True, bootstrap: int = 5, csv_: bool = False) -> pd.DataFrame:
     """
-    Applies XBBRegressor model on data
+    Applies XGBRegressor model on data
     Inputs: 
         Position: a string consisting of "wr", "rb", "te", "qb"
         Scoring: fantasy scoring type
-        Year: string consisting of a year (yyyy)
-        data2020: 2020 data
-        data2021: 2021 data
-        data2022: 2022 data
+        num_years: number of years to look back at (earliest year is 2017)
+        year_for: year of data you are using as testing
+        local: indicates whether data should be grabbed locally (keep true unless no data)
         bootstrap: number of times to bootstrap results
+        csv_: option to save projections into a csv
     """
-    prod20 = pd.merge(data2020, extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
-    prod21 = pd.merge(data2021, extract_players("2022", pos, scoring)[['name', 'MISC_FPTS/G']], how='inner', on=['name'])
-    # combining historical years
-    main = prod21.append([prod20], ignore_index=True)
+    # grab 2022, 2021, 2020, 2019, 2018, 2017 data per position
+    # grab 2022, 2021, 2020, 2019, 2018 projections per position
+
+    if local:
+        # locally grab data and format as get_data output
+        datas = {}
+        for back in range(num_years+1):
+            year = year_for-back
+            # read year's worth of player data from local data folder
+            data = pd.read_csv('data/' + str(year) + '_' + pos + '_data.csv')
+            datas[str(year)] = data
+        # locally grab results and format as get_data output
+        res_s = {}
+        for back in range(num_years):
+            year = year_for-back
+            res_s[str(year)] = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
+    else:
+        datas = get_data(pos, num_years=num_years+1, year_for=year_for, save_csv=True, scoring=scoring)
+        res_s = get_results(pos, num_years=num_years, year_for=year_for, save_csv=True, scoring=scoring)
+    
+    # getting test data (most recent yearly records)
+    most_recent = datas[str(year_for)]
+
+    # historic data will have identical columns, joined upon 'MISC_FPTS/G'
+    df_cols = list(most_recent.columns)
+    df_cols.append('MISC_FPTS/G')
+    # start historic dataframe with previously specified column names
+    historic = pd.DataFrame(columns=df_cols)
+
+    # iteratively build historic data for number of years to look back upon
+    for back in range(num_years):
+        year = year_for-back
+        # merge 2021 with 2022 results, 2020 with 2021 results, ...
+        combined = pd.merge(datas[str(year-1)], res_s[str(year)], how='inner', on=['name'])
+        # append year
+        historic = historic.append([combined], ignore_index=True)
+
     # creating train matrix
-    X_train = main.values
+    X_train = historic.values
     # seperating response
     y_train = X_train[:,-1]
     X_train = np.delete(X_train, 0, 1)  # delete name column of mat
@@ -514,7 +603,7 @@ def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
     X_train = scaler.transform(X_train) # scale training data
 
     # creating test matrix
-    X_test = data2022.values
+    X_test = most_recent.values
     # recording player names
     names2022 = X_test[:,0]
     X_test = np.delete(X_test, 0, 1)  # delete name column of mat
@@ -551,7 +640,7 @@ def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
         )
         fold += 1
 
-    classes = data2022[['name', 'class']]
+    classes = most_recent[['name', 'class']]
     results = pd.DataFrame(columns=['name', 'proj fpts'])
 
     for i in range(bootstrap):
@@ -572,9 +661,11 @@ def xgb_2023(pos: str, scoring: str, data2020: pd.DataFrame, data2021: pd.DataFr
     # join results and classes
     mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
     # maintain 2022 ranks and join
-    ranks_2022 = data2022.copy()
-    ranks_2022['2022 rank'] = ranks_2022.index + 1
-    mean_result = pd.merge(mean_result, ranks_2022[['name', '2022 rank']], how='inner', on=['name'])
+    ranks_2022 = most_recent.copy()
+    ranks_2022['recent rank'] = ranks_2022.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
+    if csv_:
+        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + str(year_for) + '_xgb_projections.csv')
     return mean_result
 
 def get_data(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = False, scoring: str = 'PPR') -> dict:
@@ -601,7 +692,7 @@ def get_data(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = Fa
         names = list(df["name"].head(num))
         data = make_dists(names, str(year), pos, scoring)
         if save_csv:
-            data.to_csv(f'data/{(year)}_' + pos + '_' + scoring + '_data.csv')
+            data.to_csv(f'data/{(year)}_' + pos +'_data.csv', index=False)
         years[str(year)] = data
     return years
     
@@ -609,60 +700,9 @@ def get_results(pos: str, num_years: int, year_for: int = 2022, save_csv: bool =
     years = {}
     for back in range(num_years):
         year = year_for-back
-        df = extract_players("2021", pos, scoring)[['name', 'MISC_FPTS/G']]
+        df = extract_players(str(year), pos, scoring)[['name', 'MISC_FPTS/G']]
+        data = df[['name', 'MISC_FPTS/G']]
         if save_csv:
-            df.to_csv(f'results/{(year)}_' + pos + '_' + scoring + '_results.csv')
-        years[str(year)] = df
+            data.to_csv(f'results/{(year)}_' + pos + '_' + scoring + '_results.csv', index=False)
+        years[str(year)] = data
     return years
-
-def run_svr_2023(pos: str, scoring: str, pca: bool):
-    if pos in ['wr', 'rb']:
-        num = 100
-    else:
-        num = 50
-    # 2022
-    df2022 = extract_players('2022', pos, scoring)
-    names2022 = list(df2022["name"].head(num))
-    dists2022 = make_dists(names2022, "2022", pos)
-    # 2021
-    df2021 = extract_players("2021", pos, scoring)
-    names2021 = list(df2021["name"].head(num))
-    dists2021 = make_dists(names2021, "2021", pos)
-    # 2020
-    df2020 = extract_players("2020", pos, scoring)
-    names2020 = list(df2020["name"].head(num))
-    dists2020 = make_dists(names2020, "2020", pos)
-    # model
-    res = svr_2023(pos, scoring, dists2020, dists2021, dists2022, pca=pca)
-    result = {'2020_df' : dists2020,
-              '2021_df' : dists2021,
-              '2022_df' : dists2022,
-              'projections' : res
-    }
-    return result
-
-def run_xgb_2023(pos: str, scoring: str):
-    if pos in ['wr', 'rb']:
-        num = 100
-    else:
-        num = 50
-    # 2022
-    df2022 = extract_players('2022', pos, scoring)
-    names2022 = list(df2022["name"].head(num))
-    dists2022 = make_dists(names2022, "2022", pos)
-    # 2021
-    df2021 = extract_players("2021", pos, scoring)
-    names2021 = list(df2021["name"].head(num))
-    dists2021 = make_dists(names2021, "2021", pos)
-    # 2020
-    df2020 = extract_players("2020", pos, scoring)
-    names2020 = list(df2020["name"].head(num))
-    dists2020 = make_dists(names2020, "2020", pos)
-    # model
-    res = xgb_2023(pos, scoring, dists2020, dists2021, dists2022)
-    result = {'2020_df' : dists2020,
-              '2021_df' : dists2021,
-              '2022_df' : dists2022,
-              'projections' : res
-    }
-    return result
