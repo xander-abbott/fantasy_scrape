@@ -13,7 +13,6 @@ from sklearn.cluster import KMeans
 from sklearn.preprocessing import scale
 from sklearn.svm import SVR
 from sklearn.model_selection import GridSearchCV
-from sklearn.inspection import permutation_importance
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import KFold
@@ -166,7 +165,6 @@ def extract_years_played(name: str, year_: str, pos: str) -> int:
     url_ = 'https://www.fantasypros.com/nfl/stats/' + name + '.php'
     years_played = pd.read_html(url_)[0].shape[0] - (time_diff + 1)
     return years_played
-    
 
 def extract_year(name: str, year: str, scoring: str) -> pd.DataFrame:
     """
@@ -332,10 +330,6 @@ def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.Data
 
     if year in ['2018', '2017'] and pos == 'te':
         data = data[data.name != 'jared-cook']
-    
-    #if year == '2022' and pos == 'rb' and data.shape[0] > 1:
-    #    kw3 = recover_kw3()
-    #    data = data.append([kw3], ignore_index = True)
 
     if data.shape[0] > 1:
         clusters = run_k_means(data, 5)
@@ -394,6 +388,7 @@ def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.D
         raw_qb.append([name, age, years_played, games_played, avg_qbr, std_qbr, avg_cmp, std_cmp, avg_att, std_att, avg_pct, std_pct, 
                         avg_pyds, std_pyds, avg_ypa, std_ypa, avg_TD, std_TD, avg_INT, std_INT, avg_SACK, std_SACK, avg_rush, std_rush, avg_ryds, std_ryds, avg_rypa, std_rypa, avg_rlg,
                         std_rlg, avg_rTD, std_rTD])
+
     data = pd.DataFrame(raw_qb, columns=['name', 'age', 'years_played', 'games_played', 'avg_qbr', 'std_qbr', 'avg_cmp', 'std_cmp', 'avg_att', 'std_att', 'avg_pct', 'std_pct', 
                     'avg_pyds', 'std_pyds', 'avg_ypa', 'std_ypa', 'avg_TD', 'std_TD', 'avg_INT', 'std_INT', 'avg_SACK', 'std_SACK', 'avg_rush', 'std_rush', 'avg_ryds', 'std_ryds', 'avg_rypa', 'std_rypa', 'avg_rlg',
                     'std_rlg', 'avg_rTD', 'std_rTD'])
@@ -415,6 +410,7 @@ def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.D
     clusters = run_k_means(data, 5)
     # combine data with knn clusters
     data = pd.merge(data, clusters, how='inner', on=['name'])
+    print("Done for " + year)
     return data
 
 def read_targets(year: str, pos: str) -> pd.DataFrame:
@@ -424,128 +420,15 @@ def read_targets(year: str, pos: str) -> pd.DataFrame:
         Position: a string consisting of "wr", "rb", "te", "qb"
         Year: string consisting of a year (yyyy)
     """
-    file = 'target_data/' + year + "_targets.txt"
+    file = 'target_data/' + year + "_targets.csv"
     data = pd.read_csv(file)
     data = data[data['POS'] == pos.upper()]
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def svr_model(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True, bootstrap: int = 5, pca: bool = True, csv_: bool = False) -> pd.DataFrame:
+def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True) -> pd.DataFrame:
     """
-    Applies support vector regression model on data
-    Inputs: 
-        Position: a string consisting of "wr", "rb", "te", "qb"
-        Scoring: fantasy scoring type
-        num_years: number of years to look back at (earliest year is 2017)
-        year_for: year of data you are using as testing
-        local: indicates whether data should be grabbed locally (keep true unless no data)
-        pca: option to apply PCA on data for preprocessing
-        bootstrap: number of times to bootstrap results
-        csv_: option to save projections into a csv
-    """
-    if local:
-        # locally grab data and format as get_data output
-        datas = {}
-        for back in range(num_years+1):
-            year = year_for-back
-            # read year's worth of player data from local data folder
-            data = pd.read_csv('data/' + str(year) + '_' + pos + '_data.csv')
-            datas[str(year)] = data
-        # locally grab results and format as get_data output
-        res_s = {}
-        for back in range(num_years):
-            year = year_for-back
-            res_s[str(year)] = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
-    else:
-        datas = get_data(pos, num_years=num_years+1, year_for=year_for, save_csv=True, scoring=scoring)
-        res_s = get_results(pos, num_years=num_years, year_for=year_for, save_csv=True, scoring=scoring)
-    
-    # getting test data (most recent yearly records)
-    most_recent = datas[str(year_for)]
-
-    # historic data will have identical columns, joined upon 'MISC_FPTS/G'
-    df_cols = list(most_recent.columns)
-    df_cols.append('MISC_FPTS/G')
-    # start historic dataframe with previously specified column names
-    historic = pd.DataFrame(columns=df_cols)
-
-    # iteratively build historic data for number of years to look back upon
-    for back in range(num_years):
-        year = year_for-back
-        # merge 2021 with 2022 results, 2020 with 2021 results, ...
-        combined = pd.merge(datas[str(year-1)], res_s[str(year)], how='inner', on=['name'])
-        # append year
-        historic = historic.append([combined], ignore_index=True)
-
-
-    # creating train matrix
-    X_train = historic.values
-    # seperating response
-    y_train = X_train[:,-1]
-    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
-    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
-    scaler = StandardScaler()
-    scaler.fit(X_train)
-    X_train = scaler.transform(X_train) # scale training data
-
-    # creating test matrix
-    X_test = most_recent.values
-    # recording player names
-    names2022 = X_test[:,0]
-    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
-    X_test = scaler.transform(X_test)
-
-    # Using sklearn
-    param_grid = {'C': [0.1, 1, 10, 100, 1000], 
-                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
-                'kernel': ['rbf']}
-
-    if pca:
-        print("PCA Selected")
-        pca_mod = PCA(n_components=0.95)
-        print("Train dimensions (pre PCA): ", X_train.shape)
-        print("Test dimensions (pre PCA): ", X_test.shape)
-        pca_mod.fit(X_train)
-        X_train = pca_mod.transform(X_train)
-        X_test = pca_mod.transform(X_test)
-        print("Train dimensions (post PCA): ", X_train.shape)
-        print("Test dimensions (post PCA): ", X_test.shape)
-
-    classes = most_recent[['name', 'class']]
-    results = pd.DataFrame(columns=['name', 'proj fpts'])
-    for i in range(bootstrap):
-        svr = SVR()
-        # initializing grid search model
-        grid = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 3)
-
-        # Fitting the model
-        grid.fit(X_train, y_train)
-        
-        # Predict the model
-        fpts_pred = grid.predict(X_test)
-        result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
-        results = results.append([result], ignore_index=True)
-        print(f"iteration {i+1}: Dimensions = {results.shape}")
-
-    # group bootstrapped results by player name
-    results_grouped = results.groupby('name')
-    # record mean
-    mean_result = results_grouped.mean()
-    mean_result = mean_result.sort_values('proj fpts', ascending=False)
-    # join results and classes
-    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
-    # maintain 2022 ranks and join
-    ranks_2022 = most_recent.copy()
-    ranks_2022['recent rank'] = ranks_2022.index + 1
-    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
-    if csv_:
-        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + str(year_for) + '_svr_projections.csv')
-    return mean_result
-
-
-def xgb_model(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True, bootstrap: int = 5, csv_: bool = False) -> pd.DataFrame:
-    """
-    Applies XGBRegressor model on data
+    Gives train, test data given specifications
     Inputs: 
         Position: a string consisting of "wr", "rb", "te", "qb"
         Scoring: fantasy scoring type
@@ -591,82 +474,7 @@ def xgb_model(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int 
         combined = pd.merge(datas[str(year-1)], res_s[str(year)], how='inner', on=['name'])
         # append year
         historic = historic.append([combined], ignore_index=True)
-
-    # creating train matrix
-    X_train = historic.values
-    # seperating response
-    y_train = X_train[:,-1]
-    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
-    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
-    scaler = StandardScaler()
-    scaler.fit(X_train)
-    X_train = scaler.transform(X_train) # scale training data
-
-    # creating test matrix
-    X_test = most_recent.values
-    # recording player names
-    names2022 = X_test[:,0]
-    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
-    # scale test according to train data
-    X_test = scaler.transform(X_test)
-
-    # apply PCA to train/test
-    pca_mod = PCA(n_components=0.95)
-    pca_mod.fit(X_train)
-    X_train = pca_mod.transform(X_train)
-    X_test = pca_mod.transform(X_test)
-
-    # initialize k-folds
-    kfold = KFold()
-
-    # operate on folds
-    fold = 0
-    for train_idx, val_idx in kfold.split(X_train, y_train):
-        X_tr = X_train[train_idx, :]
-        y_tr = y_train[train_idx]
-        
-        X_val = X_train[val_idx, :]
-        y_val = y_train[val_idx]
-
-        # initialize XGB regressor
-        xgb_r = xg.XGBRegressor(objective ='reg:squarederror', booster = 'gblinear',
-                                n_estimators = 10, eval_metric = 'rmse')
-        xgb_r.fit(X_tr, y_tr)
-        pred = xgb_r.predict(X_val)
-        rmse = mean_squared_error(y_val, pred)
-        print(f"======= Fold {fold} ========")
-        print(
-            f"Our accuracy on the validation set is {np.sqrt(rmse)}"
-        )
-        fold += 1
-
-    classes = most_recent[['name', 'class']]
-    results = pd.DataFrame(columns=['name', 'proj fpts'])
-
-    for i in range(bootstrap):
-        # Fitting the model
-        xgb_r.fit(X_train, y_train)
-        
-        # Predict the model
-        fpts_pred = xgb_r.predict(X_test)
-        result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
-        results = results.append([result], ignore_index=True)
-        print(f"iteration {i+1}: Dimensions = {results.shape}")
-
-    # group bootstrapped results by player name
-    results_grouped = results.groupby('name')
-    # record mean
-    mean_result = results_grouped.mean()
-    mean_result = mean_result.sort_values('proj fpts', ascending=False)
-    # join results and classes
-    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
-    # maintain 2022 ranks and join
-    ranks_2022 = most_recent.copy()
-    ranks_2022['recent rank'] = ranks_2022.index + 1
-    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
-    if csv_:
-        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + str(year_for) + '_xgb_projections.csv')
-    return mean_result
+    return historic, most_recent
 
 def get_data(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = False, scoring: str = 'PPR') -> dict:
     """
@@ -706,3 +514,121 @@ def get_results(pos: str, num_years: int, year_for: int = 2022, save_csv: bool =
             data.to_csv(f'results/{(year)}_' + pos + '_' + scoring + '_results.csv', index=False)
         years[str(year)] = data
     return years
+
+def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for: int = 2022, scoring: str = 'PPR'):
+    # get most recent data
+    most_recent = pd.read_csv('data/' + str(year_for) + '_' + pos + '_data.csv')
+    df_cols = list(most_recent.columns)
+    df_cols.append('MISC_FPTS/G')
+    # start historic dataframe with previously specified column names
+    historic = pd.DataFrame(columns=df_cols)
+    # iteratively build historic data for number of years to look back upon
+    for back in range(num_years):
+        year = year_for-back
+        # merge 2021 with 2022 results, 2020 with 2021 results, ...
+        year_data = pd.read_csv('data/' + str(year-1) + '_' + pos + '_data.csv')
+        result = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
+        combined = pd.merge(year_data, result, how='inner', on=['name'])
+        # append year
+        historic = historic.append([combined], ignore_index=True)
+    filtered_historic = historic[historic['years_played'] == years_played]
+    filtered_historic.reset_index(inplace = True,drop = True)
+    filtered_most_recent = most_recent[most_recent['years_played'] == years_played]
+    return filtered_historic, filtered_most_recent
+
+def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True):
+    # making copies to avoid mutations
+    X_train_df = train.copy()
+    #print('train dim: ', X_train_df.shape)
+    X_test_df = test.copy()
+    #print('test dim: ', X_test_df.shape)
+
+    X_train = X_train_df.values
+    # seperating response
+    y_train = X_train[:,-1]
+    #print('train mat dim: ', X_train.shape)
+    #print('deleting names and response')
+    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
+    #print('train mat dim: ', X_train.shape)
+
+    scaler = StandardScaler()
+    scaler.fit(X_train)
+    X_train = scaler.transform(X_train) # scale training data
+
+    # creating test matrix
+    X_test = X_test_df.values
+    #print('test mat dim: ', X_test.shape)
+    # recording player names
+    names2022 = X_test[:,0]
+    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
+    #print('test mat dim: ', X_test.shape)
+    # scale test according to train data
+    X_test = scaler.transform(X_test)
+
+    # apply PCA to train/test
+    pca_mod = PCA(n_components=0.95)
+    pca_mod.fit(X_train)
+    X_train = pca_mod.transform(X_train)
+    X_test = pca_mod.transform(X_test)
+
+    # initialize k-folds
+    kfold = KFold()
+
+    # operate on folds
+    fold = 0
+    for train_idx, val_idx in kfold.split(X_train, y_train):
+        X_tr = X_train[train_idx, :]
+        y_tr = y_train[train_idx]
+        
+        X_val = X_train[val_idx, :]
+        y_val = y_train[val_idx]
+
+        if model_ == 'xgb':
+            # initialize XGB regressor
+            mod = xg.XGBRegressor(objective ='reg:squarederror', booster = 'gblinear',
+                                    n_estimators = 10, eval_metric = 'rmse')
+        if model_ == 'svr':
+            param_grid = {'C': [0.1, 1, 10, 100, 1000], 
+                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
+                'kernel': ['rbf']}
+            svr = SVR()
+            # initializing grid search model
+            mod = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 1)
+
+        mod.fit(X_tr, y_tr)
+        pred = mod.predict(X_val)
+        rmse = mean_squared_error(y_val, pred)
+        print(f"======= Fold {fold} ========")
+        print(
+            f"Our accuracy on the validation set is {np.sqrt(rmse)}"
+        )
+        fold += 1
+
+    classes = X_test_df[['name', 'class']]
+    results = pd.DataFrame(columns=['name', 'proj fpts'])
+
+    for i in range(bootstrap):
+        # Fitting the model
+        mod.fit(X_train, y_train)
+        
+        # Predict the model
+        fpts_pred = mod.predict(X_test)
+        result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
+        results = results.append([result], ignore_index=True)
+        print(f"iteration {i+1}: Dimensions = {results.shape}")
+
+    # group bootstrapped results by player name
+    results_grouped = results.groupby('name')
+    # record mean
+    mean_result = results_grouped.mean()
+    mean_result = mean_result.sort_values('proj fpts', ascending=False)
+    # join results and classes
+    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
+    # maintain 2022 ranks and join
+    ranks_2022 = X_test_df.copy()
+    ranks_2022['recent rank'] = ranks_2022.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
+    if save_csv:
+        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
+    return mean_result
