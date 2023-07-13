@@ -285,6 +285,8 @@ def make_dists(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.Data
     
     # combine aggregates with team target %
     data = pd.merge(data, read_targets(year, pos), how='inner', on=['name'])
+    print('Merging ' + year + ' data with ' + str(eval(year)+1) + ' ADPs')
+    data = pd.merge(data, read_adps(str(eval(year)+1), scoring), how='inner', on=['name'])
 
     # combine aggregates with nfl next gen recieving stats
     if pos in ['wr']:
@@ -406,7 +408,8 @@ def make_dists_qb(names: str, year: str, pos: str, scoring: str = 'PPR') -> pd.D
     if year == '2017':
         data = data[data.name != 'derek-carr']
         data = data[data.name != 'ej-manuel']
-    
+    print('Merging ' + year + ' data with ' + str(eval(year)+1) + ' ADPs')
+    data = pd.merge(data, read_adps(str(eval(year)+1), scoring), how='inner', on=['name'])
     clusters = run_k_means(data, 5)
     # combine data with knn clusters
     data = pd.merge(data, clusters, how='inner', on=['name'])
@@ -447,7 +450,7 @@ def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int
         for back in range(num_years+1):
             year = year_for-back
             # read year's worth of player data from local data folder
-            data = pd.read_csv('data/' + str(year) + '_' + pos + '_data.csv')
+            data = pd.read_csv('data/' + str(year) + '_' + pos + '_' + scoring  + '_data.csv')
             datas[str(year)] = data
         # locally grab results and format as get_data output
         res_s = {}
@@ -500,7 +503,7 @@ def get_data(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = Fa
         names = list(df["name"].head(num))
         data = make_dists(names, str(year), pos, scoring)
         if save_csv:
-            data.to_csv(f'data/{(year)}_' + pos +'_data.csv', index=False)
+            data.to_csv(f'data/{(year)}_' + pos + '_' + scoring + '_data.csv', index=False)
         years[str(year)] = data
     return years
     
@@ -517,7 +520,7 @@ def get_results(pos: str, num_years: int, year_for: int = 2022, save_csv: bool =
 
 def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for: int = 2022, scoring: str = 'PPR'):
     # get most recent data
-    most_recent = pd.read_csv('data/' + str(year_for) + '_' + pos + '_data.csv')
+    most_recent = pd.read_csv('data/' + str(year_for) + '_' + pos + '_' + scoring + '_data.csv')
     df_cols = list(most_recent.columns)
     df_cols.append('MISC_FPTS/G')
     # start historic dataframe with previously specified column names
@@ -526,7 +529,7 @@ def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for:
     for back in range(num_years):
         year = year_for-back
         # merge 2021 with 2022 results, 2020 with 2021 results, ...
-        year_data = pd.read_csv('data/' + str(year-1) + '_' + pos + '_data.csv')
+        year_data = pd.read_csv('data/' + str(year-1) + '_' + pos + '_' + scoring  + '_data.csv')
         result = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
         combined = pd.merge(year_data, result, how='inner', on=['name'])
         # append year
@@ -632,3 +635,37 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
     if save_csv:
         mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
     return mean_result
+
+def read_adps(year: str, scoring: str) -> pd.DataFrame:
+    if scoring == 'PPR': 
+        data = pd.read_html(f'https://www.fantasypros.com/nfl/adp/ppr-overall.php?year={year}')[0]
+    else:
+        data = pd.read_html(f'https://www.fantasypros.com/nfl/adp/half-point-ppr-overall.php?year={year}')[0]
+
+    data['name'] = data['Player Team (Bye)'].apply(lambda x: process_adp_name(str(x)))
+
+    if year == '2023':
+        data = data[['name', 'AVG']]
+    else:
+        # ESPN for PPR
+        if scoring == 'PPR':
+            data = data[['name', 'ESPN']]
+        # Yahoo for HALF
+        else:
+            data = data[['name', 'Yahoo']]
+    data.columns.values[1] = "ADP"
+    data = data.dropna()
+    return data
+
+def process_adp_name(text: str) -> str:
+    if len(text.split(' ')) == 2:
+        return clean_name(text)
+    else:
+        # section last word of name
+        last_word = text.split(' ')[-1]
+        # if the last word doesn't start with "(" it's a injury designation {"O", "Q", "D", "IR"}. Remove it
+        if last_word[0] != "(":
+            text = text.rsplit(' ', 1)[0]
+        # now take away bye week designation because it doesn't match previous convention
+        text = text.rsplit(' ', 1)[0]
+        return clean_name(text)
