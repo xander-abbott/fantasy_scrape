@@ -19,6 +19,9 @@ from sklearn.model_selection import KFold
 from sklearn.model_selection import cross_val_score
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.inspection import permutation_importance
+from matplotlib import pyplot as plt
 
 
 base = "https://www.fantasypros.com/nfl/stats/"
@@ -539,9 +542,10 @@ def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for:
     filtered_most_recent = most_recent[most_recent['years_played'] == years_played]
     return filtered_historic, filtered_most_recent
 
-def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True):
+def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True, pca: bool = True):
     # making copies to avoid mutations
     X_train_df = train.copy()
+    X_train_cols = list(X_train_df.columns)[:-1]
     #print('train dim: ', X_train_df.shape)
     X_test_df = test.copy()
     #print('test dim: ', X_test_df.shape)
@@ -569,17 +573,19 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
     # scale test according to train data
     X_test = scaler.transform(X_test)
 
-    # apply PCA to train/test
-    pca_mod = PCA(n_components=0.95)
-    pca_mod.fit(X_train)
-    X_train = pca_mod.transform(X_train)
-    X_test = pca_mod.transform(X_test)
+    if pca:
+        # apply PCA to train/test
+        pca_mod = PCA(n_components=0.95)
+        pca_mod.fit(X_train)
+        X_train = pca_mod.transform(X_train)
+        X_test = pca_mod.transform(X_test)
 
     # initialize k-folds
     kfold = KFold()
 
     # operate on folds
     fold = 0
+    errors = []
     for train_idx, val_idx in kfold.split(X_train, y_train):
         X_tr = X_train[train_idx, :]
         y_tr = y_train[train_idx]
@@ -597,7 +603,9 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
                 'kernel': ['rbf']}
             svr = SVR()
             # initializing grid search model
-            mod = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 1)
+            mod = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 0)
+        if model_ == 'rf':
+            mod = RandomForestRegressor()
 
         mod.fit(X_tr, y_tr)
         pred = mod.predict(X_val)
@@ -607,6 +615,8 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
             f"Our accuracy on the validation set is {np.sqrt(rmse)}"
         )
         fold += 1
+        errors.append(np.sqrt(rmse))
+    print(f"Overall accuracy: {np.mean(errors)}")
 
     classes = X_test_df[['name', 'class']]
     results = pd.DataFrame(columns=['name', 'proj fpts'])
@@ -620,6 +630,12 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
         result = pd.DataFrame([names2022,fpts_pred], index=["name", "proj fpts"]).T
         results = results.append([result], ignore_index=True)
         print(f"iteration {i+1}: Dimensions = {results.shape}")
+    
+    if not pca:
+        perm_importance = permutation_importance(mod, X_train, y_train, scoring='neg_root_mean_squared_error', n_repeats=10)
+        sorted_idx = perm_importance.importances_mean.argsort()[-10:]
+        plt.barh(np.array(X_train_cols)[sorted_idx], perm_importance.importances_mean[sorted_idx])
+        plt.xlabel("Permutation Importance")
 
     # group bootstrapped results by player name
     results_grouped = results.groupby('name')
@@ -630,8 +646,9 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
     mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
     # maintain 2022 ranks and join
     ranks_2022 = X_test_df.copy()
-    ranks_2022['recent rank'] = ranks_2022.index + 1
-    mean_result = pd.merge(mean_result, ranks_2022[['name', 'recent rank']], how='inner', on=['name'])
+    ranks_2022['last rank'] = ranks_2022.index + 1
+    mean_result['rank'] = mean_result.index + 1
+    mean_result = pd.merge(mean_result, ranks_2022[['name', 'last rank']], how='inner', on=['name'])
     if save_csv:
         mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
     return mean_result
