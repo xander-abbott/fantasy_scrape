@@ -22,6 +22,7 @@ from sklearn.metrics import mean_squared_error
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
 from matplotlib import pyplot as plt
+from sklearn.linear_model import ElasticNetCV
 
 
 base = "https://www.fantasypros.com/nfl/stats/"
@@ -545,7 +546,7 @@ def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for:
 def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True, pca: bool = True):
     # making copies to avoid mutations
     X_train_df = train.copy()
-    X_train_cols = list(X_train_df.columns)[:-1]
+    X_train_cols = list(X_train_df.columns)[1:-1]
     #print('train dim: ', X_train_df.shape)
     X_test_df = test.copy()
     #print('test dim: ', X_test_df.shape)
@@ -604,8 +605,12 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
             svr = SVR()
             # initializing grid search model
             mod = GridSearchCV(svr, param_grid, scoring='neg_root_mean_squared_error', refit = True, verbose = 0)
+
         if model_ == 'rf':
             mod = RandomForestRegressor()
+
+        if model_ == 'enet':
+            mod = ElasticNetCV(l1_ratio=[.1, .5, .7, .9, .95, .99, 1], max_iter=100000)
 
         mod.fit(X_tr, y_tr)
         pred = mod.predict(X_val)
@@ -618,7 +623,7 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
         errors.append(np.sqrt(rmse))
     print(f"Overall accuracy: {np.mean(errors)}")
 
-    classes = X_test_df[['name', 'class']]
+    # classes = X_test_df[['name', 'class']]
     results = pd.DataFrame(columns=['name', 'proj fpts'])
 
     for i in range(bootstrap):
@@ -638,16 +643,18 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
         plt.xlabel("Permutation Importance")
 
     # group bootstrapped results by player name
-    results_grouped = results.groupby('name')
+    results_grouped = results.groupby('name', as_index=False)
     # record mean
     mean_result = results_grouped.mean()
     mean_result = mean_result.sort_values('proj fpts', ascending=False)
+    mean_result = mean_result.reset_index(drop=True)
     # join results and classes
-    mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
+    # mean_result = pd.merge(mean_result, classes, how='inner', on=['name'])
     # maintain 2022 ranks and join
     ranks_2022 = X_test_df.copy()
     ranks_2022['last rank'] = ranks_2022.index + 1
     mean_result['rank'] = mean_result.index + 1
+    print(mean_result.columns)
     mean_result = pd.merge(mean_result, ranks_2022[['name', 'last rank']], how='inner', on=['name'])
     if save_csv:
         mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
@@ -686,3 +693,32 @@ def process_adp_name(text: str) -> str:
         # now take away bye week designation because it doesn't match previous convention
         text = text.rsplit(' ', 1)[0]
         return clean_name(text)
+
+def summarize_proj(pos: str, year: str = '2022', scoring: str = 'PPR', save_csv: bool = True):
+    rf = pd.read_csv(f"projections/{pos}_{scoring}_{year}_rf_projections.csv")[['name', 'proj fpts']]
+    rf.columns.values[1] = "rf proj"
+
+    names_ranks = pd.read_csv(f"projections/{pos}_{scoring}_{year}_rf_projections.csv")[['name', 'last rank']]
+
+    enet = pd.read_csv(f"projections/{pos}_{scoring}_{year}_enet_projections.csv")[['name', 'proj fpts']]
+    enet.columns.values[1] = "enet proj"
+
+    xgb = pd.read_csv(f"projections/{pos}_{scoring}_{year}_xgb_projections.csv")[['name', 'proj fpts']]
+    xgb.columns.values[1] = "xgb proj"
+
+    svr = pd.read_csv(f"projections/{pos}_{scoring}_{year}_svr_projections.csv")[['name', 'proj fpts']]
+    svr.columns.values[1] = "svr proj"
+
+    mean = pd.read_csv(f"projections/{pos}_{scoring}_{year}_mean_projections.csv")
+    mean.columns.values[1] = "mean proj"
+
+    sum_ = pd.merge(svr, mean, how='inner', on=['name'])
+    sum_ = pd.merge(enet, mean, how='inner', on=['name'])
+    sum_ = pd.merge(xgb, sum_, how='inner', on=['name'])
+    sum_ = pd.merge(rf, sum_, how='inner', on=['name'])
+    sum_ = pd.merge(sum_, names_ranks, how='inner', on=['name'])
+    sum_ = sum_.sort_values('rank', ascending=True)
+    
+    if save_csv:
+        sum_.to_csv(f"projections/{pos}_{scoring}_{year}_summary.csv", index=False)
+    return sum_
