@@ -23,6 +23,11 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.inspection import permutation_importance
 from matplotlib import pyplot as plt
 from sklearn.linear_model import ElasticNetCV
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score
+from sklearn.neighbors import KNeighborsClassifier
+from sklearn.linear_model import LogisticRegressionCV
+from sklearn.svm import SVC
 
 
 base = "https://www.fantasypros.com/nfl/stats/"
@@ -713,7 +718,7 @@ def summarize_proj(pos: str, year: str = '2022', scoring: str = 'PPR', save_csv:
     mean.columns.values[1] = "mean proj"
 
     sum_ = pd.merge(svr, mean, how='inner', on=['name'])
-    sum_ = pd.merge(enet, mean, how='inner', on=['name'])
+    sum_ = pd.merge(enet, sum_, how='inner', on=['name'])
     sum_ = pd.merge(xgb, sum_, how='inner', on=['name'])
     sum_ = pd.merge(rf, sum_, how='inner', on=['name'])
     sum_ = pd.merge(sum_, names_ranks, how='inner', on=['name'])
@@ -722,3 +727,121 @@ def summarize_proj(pos: str, year: str = '2022', scoring: str = 'PPR', save_csv:
     if save_csv:
         sum_.to_csv(f"projections/{pos}_{scoring}_{year}_summary.csv", index=False)
     return sum_
+
+def predict_elite(pos: str, model: str = 'rf', percentile: int = 0.9, pca: bool = False, year_for: int = 2022) -> pd.DataFrame:
+    if year_for == 2021:
+        train_, test_ = train_test(pos, year_for=year_for, num_years=4)
+    else:
+        train_, test_ = train_test(pos)
+    train_['indx'] = train_.index + 1
+    train_ = train_.drop('ADP', axis =1)
+    test_ = test_.drop('ADP', axis = 1)
+    lims = [train_['MISC_FPTS/G'].quantile(q=percentile), 0]
+    max = np.inf
+    classes = {}
+    classes['indx'] = []
+    classes['class'] = []
+    class_ = 0
+    for lim in lims:
+        data = train_[train_['MISC_FPTS/G'] < max]
+        data = data[data['MISC_FPTS/G'] > lim]
+        for indx in data['indx']:
+            classes['indx'].append(indx)
+            classes['class'].append(class_)
+        class_ += 1
+        max = lim
+    classes_df = pd.DataFrame.from_dict(classes)
+    train_classes = pd.merge(train_, classes_df, how='inner', on = ['indx'])
+    X_train_cols = list(train_classes.columns)[1:-2]
+    X_train = train_classes.values
+    # seperating response
+    y_train = X_train[:,-1].astype('int')
+    X_train = np.delete(X_train, 0, 1)  # delete name column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete response column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete indx column of mat
+    X_train = np.delete(X_train, -1, 1)  # delete fpts column of mat
+    scaler = StandardScaler()
+    scaler.fit(X_train)
+    X_train = scaler.transform(X_train) # scale training data
+    # creating test matrix
+    X_test = test_.values
+    #print('test mat dim: ', X_test.shape)
+    # recording player names
+    names2022 = X_test[:,0]
+    X_test = np.delete(X_test, 0, 1)  # delete name column of mat
+    # scale test according to train data
+    X_test = scaler.transform(X_test)
+
+    # initialize k-folds
+    kfold = KFold()
+
+    if pca:
+        # apply PCA to train/test
+        pca_mod = PCA(n_components=0.95)
+        pca_mod.fit(X_train)
+        X_train = pca_mod.transform(X_train)
+        X_test = pca_mod.transform(X_test)
+
+    # operate on folds
+    fold = 0
+    errors = []
+    for train_idx, val_idx in kfold.split(X_train, y_train):
+        X_tr = X_train[train_idx, :]
+        y_tr = y_train[train_idx]
+        
+        X_val = X_train[val_idx, :]
+        y_val = y_train[val_idx]
+
+        if model == 'rf':
+            mod = RandomForestClassifier()
+
+        if model == 'kn':
+            mod = KNeighborsClassifier(n_neighbors=10)
+
+        if model == 'lr':
+            mod = LogisticRegressionCV(
+            penalty="elasticnet",
+            Cs=[0.001, 0.01, 0.1, 1, 10, 100, 1000],
+            l1_ratios=[.1, .5, .7, .9, .95, .99, 1],
+            solver="saga",
+            max_iter=50000
+        )
+            
+        if model == 'svc':
+            param_grid = {'C': [0.1, 1, 10, 100, 1000], 
+                'gamma': [1, 0.1, 0.01, 0.001, 0.0001],
+                'kernel': ['rbf']}
+            svc = SVC()
+            # initializing grid search model
+            mod = GridSearchCV(svc, param_grid, scoring='accuracy', refit = True, verbose = 0)
+        
+        if model == 'xgb':
+            mod = xg.XGBClassifier(n_estimators = 10, use_label_encoder=False, eval_metric = 'logloss')
+
+
+        mod.fit(X_tr, y_tr)
+        pred = mod.predict(X_val)
+        acc = accuracy_score(y_val, pred)
+        print(f"======= Fold {fold} ========")
+        print(
+            f"Our accuracy on the validation set is {acc}"
+        )
+        fold += 1
+        errors.append(acc)
+    print(f"Overall accuracy: {np.mean(errors)}")
+
+    # classes = X_test_df[['name', 'class']]
+    results = pd.DataFrame(columns=['name', 'class'])
+
+    # Fitting the model
+    mod.fit(X_train, y_train)
+
+    # Predict the model
+    cl = mod.predict(X_test)
+    result = pd.DataFrame([names2022,cl], index=["name", "class"]).T
+
+    #perm_importance = permutation_importance(mod, X_train, y_train, scoring='accuracy', n_repeats=10)
+    #sorted_idx = perm_importance.importances_mean.argsort()[-10:]
+    #plt.barh(np.array(X_train_cols)[sorted_idx], perm_importance.importances_mean[sorted_idx])
+    #plt.xlabel("Permutation Importance")
+    return result
