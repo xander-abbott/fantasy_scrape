@@ -438,7 +438,7 @@ def read_targets(year: str, pos: str) -> pd.DataFrame:
     data['name'] = data['NAME'].apply(lambda x: clean_name(x))
     return data[['name', 'TM TGT %']]
 
-def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True) -> pd.DataFrame:
+def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int = 2022, local: bool = True, totals: bool = False) -> pd.DataFrame:
     """
     Gives train, test data given specifications
     Inputs: 
@@ -465,7 +465,10 @@ def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int
         res_s = {}
         for back in range(num_years):
             year = year_for-back
-            res_s[str(year)] = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
+            if totals:
+                res_s[str(year)] = pd.read_csv('totals/' + str(year) + '_' + pos + '_' + scoring + '_totals.csv')
+            else:
+                res_s[str(year)] = pd.read_csv('results/' + str(year) + '_' + pos + '_' + scoring + '_results.csv')
     else:
         datas = get_data(pos, num_years=num_years+1, year_for=year_for, save_csv=True, scoring=scoring)
         res_s = get_results(pos, num_years=num_years, year_for=year_for, save_csv=True, scoring=scoring)
@@ -475,7 +478,10 @@ def train_test(pos: str, scoring: str = 'PPR', num_years: int = 5, year_for: int
 
     # historic data will have identical columns, joined upon 'MISC_FPTS/G'
     df_cols = list(most_recent.columns)
-    df_cols.append('MISC_FPTS/G')
+    if totals:
+        df_cols.append('MISC_FPTS')
+    else:
+        df_cols.append('MISC_FPTS/G')
     # start historic dataframe with previously specified column names
     historic = pd.DataFrame(columns=df_cols)
 
@@ -527,6 +533,17 @@ def get_results(pos: str, num_years: int, year_for: int = 2022, save_csv: bool =
         years[str(year)] = data
     return years
 
+def get_total_fpts(pos: str, num_years: int, year_for: int = 2022, save_csv: bool = False, scoring: str = 'PPR') -> pd.DataFrame:
+    years = {}
+    for back in range(num_years):
+        year = year_for-back
+        df = extract_players(str(year), pos, scoring)[['name', 'MISC_FPTS']]
+        data = df[['name', 'MISC_FPTS']]
+        if save_csv:
+            data.to_csv(f'totals/{(year)}_' + pos + '_' + scoring + '_totals.csv', index=False)
+        years[str(year)] = data
+    return years
+
 def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for: int = 2022, scoring: str = 'PPR'):
     # get most recent data
     most_recent = pd.read_csv('data/' + str(year_for) + '_' + pos + '_' + scoring + '_data.csv')
@@ -548,7 +565,7 @@ def grab_years_played(pos: str, years_played: int, num_years: int = 5, year_for:
     filtered_most_recent = most_recent[most_recent['years_played'] == years_played]
     return filtered_historic, filtered_most_recent
 
-def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True, pca: bool = True):
+def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str = '2022', scoring: str = 'PPR', model_: str = 'xgb', bootstrap: int = 5, save_csv = True, pca: bool = True, totals: bool = False):
     # making copies to avoid mutations
     X_train_df = train.copy()
     X_train_cols = list(X_train_df.columns)[1:-1]
@@ -662,7 +679,10 @@ def revised_run(train: pd.DataFrame, test: pd.DataFrame, pos: str, year_for: str
     print(mean_result.columns)
     mean_result = pd.merge(mean_result, ranks_2022[['name', 'last rank']], how='inner', on=['name'])
     if save_csv:
-        mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
+        if totals:
+            mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_totals.csv', index = False)
+        else:
+            mean_result.to_csv('projections/' + pos + '_' + scoring + '_' + year_for + '_' + model_ + '_projections.csv', index = False)
     return mean_result
 
 def read_adps(year: str, scoring: str) -> pd.DataFrame:
@@ -673,7 +693,7 @@ def read_adps(year: str, scoring: str) -> pd.DataFrame:
 
     data['name'] = data['Player Team (Bye)'].apply(lambda x: process_adp_name(str(x)))
 
-    if year == '2023':
+    if year == '2024':
         data = data[['name', 'AVG']]
     else:
         # ESPN for PPR
@@ -726,6 +746,35 @@ def summarize_proj(pos: str, year: str = '2022', scoring: str = 'PPR', save_csv:
     
     if save_csv:
         sum_.to_csv(f"projections/{pos}_{scoring}_{year}_summary.csv", index=False)
+    return sum_
+
+def summarize_tot(pos: str, year: str = '2022', scoring: str = 'PPR', save_csv: bool = True):
+    rf = pd.read_csv(f"projections/{pos}_{scoring}_{year}_rf_totals.csv")[['name', 'proj fpts']]
+    rf.columns.values[1] = "rf proj"
+
+    names_ranks = pd.read_csv(f"projections/{pos}_{scoring}_{year}_rf_totals.csv")[['name', 'last rank']]
+
+    enet = pd.read_csv(f"projections/{pos}_{scoring}_{year}_enet_totals.csv")[['name', 'proj fpts']]
+    enet.columns.values[1] = "enet proj"
+
+    xgb = pd.read_csv(f"projections/{pos}_{scoring}_{year}_xgb_totals.csv")[['name', 'proj fpts']]
+    xgb.columns.values[1] = "xgb proj"
+
+    svr = pd.read_csv(f"projections/{pos}_{scoring}_{year}_svr_totals.csv")[['name', 'proj fpts']]
+    svr.columns.values[1] = "svr proj"
+
+    mean = pd.read_csv(f"projections/{pos}_{scoring}_{year}_mean_totals.csv")
+    mean.columns.values[1] = "mean proj"
+
+    sum_ = pd.merge(svr, mean, how='inner', on=['name'])
+    sum_ = pd.merge(enet, sum_, how='inner', on=['name'])
+    sum_ = pd.merge(xgb, sum_, how='inner', on=['name'])
+    sum_ = pd.merge(rf, sum_, how='inner', on=['name'])
+    sum_ = pd.merge(sum_, names_ranks, how='inner', on=['name'])
+    sum_ = sum_.sort_values('rank', ascending=True)
+    
+    if save_csv:
+        sum_.to_csv(f"projections/{pos}_{scoring}_{year}_summary_totals.csv", index=False)
     return sum_
 
 def predict_elite(pos: str, model: str = 'rf', percentile: int = 0.9, pca: bool = False, year_for: int = 2022) -> pd.DataFrame:
